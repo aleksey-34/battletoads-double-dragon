@@ -579,11 +579,11 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
     const pnl = await computeClosedPnlForApiKey(client.apiKeyName, sinceMs);
     const eqRow = await db.get<{ equity_start?: number; equity_now?: number }>(
       `SELECT
-         (SELECT equity_usd FROM monitoring_snapshots ms
+         (SELECT equity_usd FROM mon.monitoring_snapshots ms
           JOIN api_keys a ON a.id = ms.api_key_id
           WHERE a.name = ? AND ms.recorded_at >= datetime('now', ?)
           ORDER BY ms.recorded_at ASC LIMIT 1) AS equity_start,
-         (SELECT equity_usd FROM monitoring_snapshots ms
+         (SELECT equity_usd FROM mon.monitoring_snapshots ms
           JOIN api_keys a ON a.id = ms.api_key_id
           WHERE a.name = ?
           ORDER BY ms.recorded_at DESC LIMIT 1) AS equity_now`,

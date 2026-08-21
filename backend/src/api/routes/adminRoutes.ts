@@ -51,6 +51,7 @@ import {
   updateTradingSystem,
 } from '../../bot/tradingSystems';
 import {
+  backfillMonitoringEquityFromExchange,
   getMonitoringBundle,
   getMonitoringLatestBatch,
   getMonitoringTradeStats,
@@ -526,7 +527,10 @@ adminRouter.delete('/api-keys/:id', async (req, res) => {
 
     await db.run('DELETE FROM risk_settings WHERE api_key_id = ?', [apiKeyId]);
     await db.run('DELETE FROM strategies WHERE api_key_id = ?', [apiKeyId]);
-    await db.run('DELETE FROM monitoring_snapshots WHERE api_key_id = ?', [apiKeyId]);
+    {
+      const { deleteMonitoringDataForApiKey } = await import('../../monitoring/db');
+      await deleteMonitoringDataForApiKey(Number(apiKeyId));
+    }
     await db.run('DELETE FROM api_keys WHERE id = ?', [apiKeyId]);
 
     removeExchangeClient(existingKey.name);
@@ -2303,6 +2307,21 @@ adminRouter.post('/monitoring/:apiKeyName/snapshot', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Error recording monitoring snapshot for ${apiKeyName}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** On-demand: pull full available equity history from the exchange (Bybit Transaction Log). */
+adminRouter.post('/monitoring/:apiKeyName/backfill-equity', requirePlatformAdmin, async (req, res) => {
+  const { apiKeyName } = req.params;
+  const maxDaysRaw = Number.parseInt(String(req.body?.maxDays ?? req.query.maxDays ?? '90'), 10);
+  const maxDays = Number.isFinite(maxDaysRaw) ? Math.min(180, Math.max(1, maxDaysRaw)) : 90;
+  try {
+    const result = await backfillMonitoringEquityFromExchange(apiKeyName, { maxDays });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error backfilling equity for ${apiKeyName}: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

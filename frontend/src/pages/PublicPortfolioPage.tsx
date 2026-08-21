@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Space, Spin, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Space, Spin, Tag, Typography } from 'antd';
 import { useParams } from 'react-router-dom';
 import MonitoringChartPanel, {
   ChartPeriodDays,
@@ -8,7 +8,7 @@ import MonitoringChartPanel, {
   MonitoringTradeFrequencyPoint,
   MonitoringTradeRow,
 } from '../components/MonitoringChartPanel';
-import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
+import { buildPublicPortfolioUrl, sharePublicPortfolioLink } from '../utils/portfolioLinks';
 
 type PublicPortfolioPayload = {
   success: boolean;
@@ -91,12 +91,7 @@ const PublicPortfolioPage: React.FC = () => {
 
   const handleCopyLink = async () => {
     if (!portfolioSlug) return;
-    const ok = await copyPublicPortfolioLink(portfolioSlug);
-    if (ok) {
-      message.success('Ссылка скопирована');
-    } else {
-      message.error('Не удалось скопировать ссылку');
-    }
+    await sharePublicPortfolioLink(portfolioSlug, { title: 'Публичная ссылка мониторинга' });
   };
 
   return (

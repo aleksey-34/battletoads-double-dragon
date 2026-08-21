@@ -1,5 +1,10 @@
-import { getBalances, getPositions } from './exchange';
-import { db } from '../utils/database';
+import { fetchExchangeEquityHistory, fetchExchangeFillsHistory, getBalances, getPositions } from './exchange';
+import { db as mainDb } from '../utils/database';
+import { getMonitoringDb } from '../monitoring/db';
+import logger from '../utils/logger';
+
+/** Monitoring history DB (monitoring.db). API keys stay in mainDb. */
+const mdb = () => getMonitoringDb();
 
 const toFiniteNumber = (value: any, fallback: number = 0): number => {
   const numeric = Number(value);
@@ -74,8 +79,8 @@ const calculateMetrics = (balances: any[], positions: any[]) => {
   };
 };
 
-const getApiKeyRow = async (apiKeyName: string): Promise<{ id: number; exchange: string }> => {
-  const row = await db.get('SELECT id, exchange FROM api_keys WHERE name = ?', [apiKeyName]);
+const getApiKeyRow = async (apiKeyName: string): Promise<{ id: number; exchange: string; name: string }> => {
+  const row = await mainDb.get('SELECT id, exchange, name FROM api_keys WHERE name = ?', [apiKeyName]);
   if (!row) {
     throw new Error(`API key not found: ${apiKeyName}`);
   }
@@ -83,6 +88,7 @@ const getApiKeyRow = async (apiKeyName: string): Promise<{ id: number; exchange:
   return {
     id: Number(row.id),
     exchange: String(row.exchange || ''),
+    name: String(row.name || apiKeyName),
   };
 };
 
@@ -150,7 +156,7 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
 
   // Detect anomalous peaks: filter peaks older than 30 days or unrealistically high (>1.5x current equity)
   // This prevents drawdown from being inflated by initialization bugs or temporary spikes
-  const peakRow = await db.get(
+  const peakRow = await mdb().get(
     `SELECT MAX(equity_usd) AS max_equity, MAX(recorded_at) AS peak_time 
      FROM monitoring_snapshots 
      WHERE api_key_id = ? AND datetime(recorded_at) >= datetime('now', '-30 days')`,
@@ -162,7 +168,7 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
   const anomalyThreshold = metrics.equityUsd * 1.5;
   if (peakEquity > anomalyThreshold) {
     // If peak looks anomalous, fall back to 90-day median peak or just use current equity
-    const medianPeakRow = await db.get(
+    const medianPeakRow = await mdb().get(
       `SELECT (
         SELECT equity_usd FROM monitoring_snapshots 
         WHERE api_key_id = ? AND datetime(recorded_at) >= datetime('now', '-90 days')
@@ -189,22 +195,23 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
   //   → represents cumulative realized PnL since account start, excluding open position unrealized gains.
   // Migration: add columns if not yet present (idempotent, fails silently if already exists).
   try {
-    await db.exec('ALTER TABLE monitoring_snapshots ADD COLUMN deposit_base_usd REAL DEFAULT NULL');
+    await mdb().exec('ALTER TABLE monitoring_snapshots ADD COLUMN deposit_base_usd REAL DEFAULT NULL');
   } catch { /* column already exists */ }
   try {
-    await db.exec('ALTER TABLE monitoring_snapshots ADD COLUMN pnl_net_usd REAL DEFAULT NULL');
+    await mdb().exec('ALTER TABLE monitoring_snapshots ADD COLUMN pnl_net_usd REAL DEFAULT NULL');
   } catch { /* column already exists */ }
 
-  const firstSnap = await db.get(
+  const firstSnap = await mdb().get(
     'SELECT equity_usd FROM monitoring_snapshots WHERE api_key_id = ? ORDER BY id ASC LIMIT 1',
     [key.id]
   ) as { equity_usd?: number } | undefined;
   const depositBase = Number(firstSnap?.equity_usd ?? metrics.equityUsd);
   const pnlNet = metrics.equityUsd - metrics.unrealizedPnl - depositBase;
 
-  const insert: any = await db.run(
+  const insert: any = await mdb().run(
     `INSERT INTO monitoring_snapshots (
       api_key_id,
+      api_key_name,
       exchange,
       equity_usd,
       unrealized_pnl,
@@ -215,10 +222,12 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
       drawdown_percent,
       deposit_base_usd,
       pnl_net_usd,
+      source,
       recorded_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', CURRENT_TIMESTAMP)`,
     [
       key.id,
+      key.name,
       key.exchange,
       metrics.equityUsd,
       metrics.unrealizedPnl,
@@ -232,7 +241,7 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
     ]
   );
 
-  const created = await db.get('SELECT * FROM monitoring_snapshots WHERE id = ?', [insert.lastID]);
+  const created = await mdb().get('SELECT * FROM monitoring_snapshots WHERE id = ?', [insert.lastID]);
 
   try {
     const { syncPortfolioCircuitBreakerEquity } = await import('./portfolioCircuitBreakerRuntime');
@@ -285,20 +294,36 @@ export const getMonitoringTradeFrequency = async (
     ? `strftime('%Y-%m-%dT%H:00:00Z', lte.actual_time / 1000, 'unixepoch')`
     : `strftime('%Y-%m-%dT00:00:00Z', lte.actual_time / 1000, 'unixepoch')`;
 
-  const rows = await db.all(
+  const rows = await mainDb.all(
     `SELECT
-       ${bucketExpr} AS bucket_ts,
-       COUNT(*) AS trade_count
-     FROM live_trade_events lte
-     JOIN strategies s ON s.id = lte.strategy_id
-     WHERE s.api_key_id = ?
-       AND lte.actual_time IS NOT NULL
-       AND lte.actual_time > 0
-       ${timeFilter}
+       bucket_ts,
+       SUM(trade_count) AS trade_count
+     FROM (
+       SELECT
+         ${bucketExpr} AS bucket_ts,
+         COUNT(*) AS trade_count
+       FROM live_trade_events lte
+       JOIN strategies s ON s.id = lte.strategy_id
+       WHERE s.api_key_id = ?
+         AND lte.actual_time IS NOT NULL
+         AND lte.actual_time > 0
+         ${timeFilter}
+       GROUP BY bucket_ts
+       UNION ALL
+       SELECT
+         ${bucketExpr.replace(/lte\./g, 'efe.')} AS bucket_ts,
+         COUNT(*) AS trade_count
+       FROM mon.exchange_fill_events efe
+       WHERE efe.api_key_id = ?
+         AND efe.actual_time IS NOT NULL
+         AND efe.actual_time > 0
+         ${timeFilter.replace(/lte\./g, 'efe.')}
+       GROUP BY bucket_ts
+     )
      GROUP BY bucket_ts
      ORDER BY bucket_ts ASC
      LIMIT 400`,
-    params,
+    [...params, ...params],
   ).catch(() => []) as Array<{ bucket_ts?: string; trade_count?: number }>;
 
   const mapped = rows
@@ -389,7 +414,7 @@ export const getMonitoringSnapshots = async (
   let rows: any[];
 
   if (allPeriod) {
-    rows = await db.all(
+    rows = await mdb().all(
       `SELECT *
        FROM monitoring_snapshots
        WHERE api_key_id = ?
@@ -398,7 +423,7 @@ export const getMonitoringSnapshots = async (
     );
   } else if (sinceDays && Number.isFinite(sinceDays) && sinceDays > 0) {
     const safeDays = Math.min(365, Math.max(1, Math.floor(sinceDays)));
-    rows = await db.all(
+    rows = await mdb().all(
       `SELECT *
        FROM monitoring_snapshots
        WHERE api_key_id = ?
@@ -408,7 +433,7 @@ export const getMonitoringSnapshots = async (
     );
   } else {
     const safeLimit = Math.max(1, Math.min(5000, Number.isFinite(limit) ? Math.floor(limit) : 240));
-    rows = await db.all(
+    rows = await mdb().all(
       `SELECT *
        FROM monitoring_snapshots
        WHERE api_key_id = ?
@@ -446,38 +471,54 @@ export const getMonitoringTrades = async (
   limit: number = 200,
 ): Promise<MonitoringTradeRow[]> => {
   const key = await getApiKeyRow(apiKeyName);
-  const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
   const params: Array<number> = [key.id];
   let timeFilter = '';
 
   if (sinceDays && Number.isFinite(sinceDays) && sinceDays > 0) {
     const safeDays = Math.max(1, Math.floor(sinceDays));
-    timeFilter = 'AND lte.actual_time >= ?';
+    timeFilter = 'AND actual_time >= ?';
     params.push(Date.now() - safeDays * 86_400_000);
   }
 
-  params.push(safeLimit);
-
-  const rows = await db.all(
-    `SELECT
-       lte.id,
-       lte.trade_type,
-       lte.side,
-       lte.source_symbol,
-       lte.actual_price,
-       lte.position_size,
-       lte.actual_fee,
-       lte.actual_time,
-       lte.strategy_id,
-       s.base_symbol,
-       s.quote_symbol
-     FROM live_trade_events lte
-     JOIN strategies s ON s.id = lte.strategy_id
-     WHERE s.api_key_id = ?
-       ${timeFilter}
-     ORDER BY lte.actual_time DESC
+  const rows = await mainDb.all(
+    `SELECT * FROM (
+       SELECT
+         lte.id,
+         lte.trade_type,
+         lte.side,
+         lte.source_symbol,
+         lte.actual_price,
+         lte.position_size,
+         lte.actual_fee,
+         lte.actual_time,
+         lte.strategy_id,
+         s.base_symbol,
+         s.quote_symbol
+       FROM live_trade_events lte
+       JOIN strategies s ON s.id = lte.strategy_id
+       WHERE s.api_key_id = ?
+         ${timeFilter.replace(/actual_time/g, 'lte.actual_time')}
+       UNION ALL
+       SELECT
+         efe.id,
+         efe.trade_type,
+         efe.side,
+         efe.source_symbol,
+         efe.actual_price,
+         efe.position_size,
+         efe.actual_fee,
+         efe.actual_time,
+         NULL AS strategy_id,
+         efe.source_symbol AS base_symbol,
+         NULL AS quote_symbol
+       FROM mon.exchange_fill_events efe
+       WHERE efe.api_key_id = ?
+         ${timeFilter.replace(/actual_time/g, 'efe.actual_time')}
+     )
+     ORDER BY actual_time DESC
      LIMIT ?`,
-    params,
+    [...params, ...params, safeLimit],
   ).catch(() => []) as Array<{
     id?: number;
     trade_type?: string;
@@ -564,7 +605,7 @@ export const getMonitoringBundle = async (
     ? await getMonitoringTrades(
       apiKeyName,
       allPeriod ? undefined : (days > 1 ? days : 1),
-      200,
+      allPeriod ? 500 : 200,
     ).catch(() => [])
     : undefined;
 
@@ -589,7 +630,7 @@ export const getMonitoringBundle = async (
 
 export const getMonitoringLatest = async (apiKeyName: string) => {
   const key = await getApiKeyRow(apiKeyName);
-  const row = await db.get(
+  const row = await mdb().get(
     `SELECT *
      FROM monitoring_snapshots
      WHERE api_key_id = ?
@@ -615,34 +656,34 @@ export const getMonitoringLatestBatch = async (
   if (names.length === 0) return {};
 
   const placeholders = names.map(() => '?').join(',');
-  const rows = await db.all(
-    `SELECT a.name AS api_key_name, ms.*
-     FROM api_keys a
-     LEFT JOIN monitoring_snapshots ms
-       ON ms.id = (
-         SELECT ms2.id
-         FROM monitoring_snapshots ms2
-         WHERE ms2.api_key_id = a.id
-         ORDER BY datetime(ms2.recorded_at) DESC
-         LIMIT 1
-       )
-     WHERE a.name IN (${placeholders})`,
+  const keyRows = await mainDb.all(
+    `SELECT id, name FROM api_keys WHERE name IN (${placeholders})`,
     names,
-  ).catch(() => []) as Array<Record<string, unknown>>;
+  ).catch(() => []) as Array<{ id?: number; name?: string }>;
 
   const out: Record<string, any> = {};
-  for (const row of rows || []) {
-    const name = String(row.api_key_name || '').trim();
-    if (!name) continue;
-    if (row.id == null && row.equity_usd == null && row.recorded_at == null) {
-      out[name] = null;
-      continue;
-    }
-    const { api_key_name: _drop, ...snapshot } = row;
-    out[name] = snapshot;
+  for (const name of names) out[name] = null;
+
+  const ids = keyRows.map((r) => Number(r.id)).filter((id) => Number.isFinite(id) && id > 0);
+  if (ids.length === 0) return out;
+
+  const byId = new Map<number, Record<string, unknown>>();
+  for (const id of ids) {
+    const row = await mdb().get(
+      `SELECT * FROM monitoring_snapshots
+       WHERE api_key_id = ?
+       ORDER BY datetime(recorded_at) DESC
+       LIMIT 1`,
+      [id],
+    ) as Record<string, unknown> | undefined;
+    if (row) byId.set(id, row);
   }
-  for (const name of names) {
-    if (!(name in out)) out[name] = null;
+
+  for (const keyRow of keyRows) {
+    const name = String(keyRow.name || '').trim();
+    const id = Number(keyRow.id);
+    if (!name) continue;
+    out[name] = byId.get(id) || null;
   }
   return out;
 };
@@ -657,24 +698,38 @@ export type MonitoringTradeMarker = {
 export const getMonitoringTradeStats = async (apiKeyName: string) => {
   const key = await getApiKeyRow(apiKeyName);
   const since24h = Date.now() - 86_400_000;
-  const stats = await db.get<{
+  const stats = await mainDb.get<{
     events_count?: number;
     entries_count?: number;
     last_trade_at?: number;
   }>(
     `SELECT
-       COUNT(*) AS events_count,
-       SUM(CASE
-         WHEN COALESCE(lte.trade_type, '') = 'entry'
-          AND COALESCE(lte.event_origin, 'strategy_signal') = 'strategy_signal'
-         THEN 1 ELSE 0
-       END) AS entries_count,
-       MAX(lte.actual_time) AS last_trade_at
-     FROM live_trade_events lte
-     JOIN strategies s ON s.id = lte.strategy_id
-     WHERE s.api_key_id = ?
-       AND lte.actual_time >= ?`,
-    [key.id, since24h],
+       SUM(events_count) AS events_count,
+       SUM(entries_count) AS entries_count,
+       MAX(last_trade_at) AS last_trade_at
+     FROM (
+       SELECT
+         COUNT(*) AS events_count,
+         SUM(CASE
+           WHEN COALESCE(lte.trade_type, '') = 'entry'
+            AND COALESCE(lte.event_origin, 'strategy_signal') = 'strategy_signal'
+           THEN 1 ELSE 0
+         END) AS entries_count,
+         MAX(lte.actual_time) AS last_trade_at
+       FROM live_trade_events lte
+       JOIN strategies s ON s.id = lte.strategy_id
+       WHERE s.api_key_id = ?
+         AND lte.actual_time >= ?
+       UNION ALL
+       SELECT
+         COUNT(*) AS events_count,
+         SUM(CASE WHEN COALESCE(efe.trade_type, '') = 'entry' THEN 1 ELSE 0 END) AS entries_count,
+         MAX(efe.actual_time) AS last_trade_at
+       FROM mon.exchange_fill_events efe
+       WHERE efe.api_key_id = ?
+         AND efe.actual_time >= ?
+     )`,
+    [key.id, since24h, key.id, since24h],
   ).catch(() => null);
 
   const entries24h = Math.max(0, toFiniteNumber(stats?.entries_count, 0));
@@ -697,15 +752,22 @@ export const getMonitoringTradeMarkers = async (
 ): Promise<MonitoringTradeMarker[]> => {
   const key = await getApiKeyRow(apiKeyName);
   const safeSince = Math.max(0, Math.floor(sinceMs));
-  const rows = await db.all(
-    `SELECT lte.trade_type, lte.side, lte.source_symbol, lte.actual_time
-     FROM live_trade_events lte
-     JOIN strategies s ON s.id = lte.strategy_id
-     WHERE s.api_key_id = ?
-       AND lte.actual_time >= ?
-     ORDER BY lte.actual_time ASC
+  const rows = await mainDb.all(
+    `SELECT trade_type, side, source_symbol, actual_time FROM (
+       SELECT lte.trade_type, lte.side, lte.source_symbol, lte.actual_time
+       FROM live_trade_events lte
+       JOIN strategies s ON s.id = lte.strategy_id
+       WHERE s.api_key_id = ?
+         AND lte.actual_time >= ?
+       UNION ALL
+       SELECT efe.trade_type, efe.side, efe.source_symbol, efe.actual_time
+       FROM mon.exchange_fill_events efe
+       WHERE efe.api_key_id = ?
+         AND efe.actual_time >= ?
+     )
+     ORDER BY actual_time ASC
      LIMIT 500`,
-    [key.id, safeSince],
+    [key.id, safeSince, key.id, safeSince],
   ).catch(() => []) as Array<{
     trade_type?: string;
     side?: string;
@@ -733,4 +795,317 @@ export const getMonitoringTradeMarkers = async (
       };
     })
     .filter((row): row is MonitoringTradeMarker => row !== null);
+};
+
+export type BackfillEquityResult = {
+  apiKeyName: string;
+  exchange: string;
+  inserted: number;
+  skipped: number;
+  rawEvents: number;
+  pointsFromExchange: number;
+  fillsInserted: number;
+  fillsRawEvents: number;
+  fromMs: number;
+  toMs: number;
+  firstAt: string | null;
+  lastAt: string | null;
+  note: string;
+};
+
+const backfillInFlight = new Map<string, Promise<BackfillEquityResult>>();
+
+const toSqliteUtc = (ms: number): string => {
+  return new Date(ms).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+};
+
+const ensureSnapshotSourceColumn = async () => {
+  // Schema is owned by monitoring/db.ts; keep as no-op compatibility shim.
+  const { initMonitoringDb } = await import('../monitoring/db');
+  await initMonitoringDb();
+};
+
+const ensureExchangeFillEventsTable = async () => {
+  const { initMonitoringDb } = await import('../monitoring/db');
+  await initMonitoringDb();
+};
+
+const insertInferredFillEvents = async (
+  apiKeyId: number,
+  apiKeyName: string,
+  fills: Array<{
+    tradeId: string;
+    orderId: string;
+    symbol: string;
+    side: 'Buy' | 'Sell';
+    qty: string;
+    price: string;
+    fee: string;
+    realizedPnl: string;
+    isMaker?: boolean;
+    timestamp: string;
+  }>,
+): Promise<number> => {
+  const epsilon = 1e-9;
+  const positionSignedQtyBySymbol = new Map<string, number>();
+  let inserted = 0;
+
+  const emit = async (
+    sourceTradeId: string,
+    tradeType: 'entry' | 'exit',
+    side: 'long' | 'short',
+    timestamp: number,
+    price: number,
+    qty: number,
+    fee: number,
+    realizedPnl: number,
+    isMaker: boolean,
+    orderId: string,
+    symbol: string,
+  ) => {
+    if (qty <= epsilon) return;
+    try {
+      const result: any = await mdb().run(
+        `INSERT OR IGNORE INTO exchange_fill_events (
+          api_key_id, api_key_name, trade_type, side, source_trade_id, source_order_id, source_symbol,
+          actual_price, position_size, actual_fee, realized_pnl, is_maker, actual_time, event_origin
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'exchange_backfill')`,
+        [
+          apiKeyId,
+          apiKeyName,
+          tradeType,
+          side,
+          sourceTradeId,
+          orderId || null,
+          symbol,
+          price,
+          qty,
+          fee,
+          realizedPnl,
+          isMaker ? 1 : 0,
+          timestamp,
+        ],
+      );
+      if (Number(result?.changes || 0) > 0) {
+        inserted += 1;
+      }
+    } catch (error) {
+      logger.warn(`exchange_fill_events insert failed: ${(error as Error).message}`);
+    }
+  };
+
+  const ordered = [...fills].sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
+  for (const trade of ordered) {
+    const tradeId = String(trade.tradeId || '').trim();
+    const tradeSymbol = String(trade.symbol || '').trim().toUpperCase();
+    if (!tradeId || !tradeSymbol) continue;
+
+    const timestamp = Number(trade.timestamp);
+    const price = Number(trade.price);
+    const qty = Math.abs(Number(trade.qty));
+    const fee = Math.abs(Number(trade.fee));
+    const realizedPnl = Number(trade.realizedPnl);
+    if (!(timestamp > 0 && price > 0 && qty > 0)) continue;
+
+    const sourceTradeBaseId = `${tradeSymbol}:${tradeId}`;
+    const delta = trade.side === 'Buy' ? qty : -qty;
+    const prev = positionSignedQtyBySymbol.get(tradeSymbol) || 0;
+    const next = prev + delta;
+    const isMaker = trade.isMaker === true;
+    const orderId = String(trade.orderId || '').trim();
+
+    if (Math.abs(prev) <= epsilon) {
+      const side = next >= 0 ? 'long' : 'short';
+      await emit(`${sourceTradeBaseId}:entry`, 'entry', side, timestamp, price, Math.abs(next), fee, realizedPnl, isMaker, orderId, tradeSymbol);
+      positionSignedQtyBySymbol.set(tradeSymbol, next);
+      continue;
+    }
+
+    const prevSide: 'long' | 'short' = prev >= 0 ? 'long' : 'short';
+    const nextSide: 'long' | 'short' = next >= 0 ? 'long' : 'short';
+    const prevAbs = Math.abs(prev);
+    const nextAbs = Math.abs(next);
+
+    if (prevSide === nextSide || Math.abs(next) <= epsilon) {
+      if (nextAbs > prevAbs + epsilon) {
+        await emit(`${sourceTradeBaseId}:entry`, 'entry', prevSide, timestamp, price, nextAbs - prevAbs, fee, realizedPnl, isMaker, orderId, tradeSymbol);
+      } else if (nextAbs + epsilon < prevAbs) {
+        await emit(`${sourceTradeBaseId}:exit`, 'exit', prevSide, timestamp, price, prevAbs - nextAbs, fee, realizedPnl, isMaker, orderId, tradeSymbol);
+      }
+      positionSignedQtyBySymbol.set(tradeSymbol, next);
+      continue;
+    }
+
+    await emit(`${sourceTradeBaseId}:exit`, 'exit', prevSide, timestamp, price, prevAbs, fee / 2, 0, isMaker, orderId, tradeSymbol);
+    await emit(`${sourceTradeBaseId}:entry`, 'entry', nextSide, timestamp, price, nextAbs, fee / 2, realizedPnl, isMaker, orderId, tradeSymbol);
+    positionSignedQtyBySymbol.set(tradeSymbol, next);
+  }
+
+  return inserted;
+};
+
+/**
+ * On-demand: pull equity + fills history from the exchange.
+ * Equity → monitoring_snapshots (before first live). Fills → exchange_fill_events (account-level).
+ * Bybit only for now.
+ */
+export const backfillMonitoringEquityFromExchange = async (
+  apiKeyName: string,
+  options?: { maxDays?: number; fromMs?: number; toMs?: number },
+): Promise<BackfillEquityResult> => {
+  const keyName = String(apiKeyName || '').trim();
+  if (!keyName) {
+    throw new Error('apiKeyName is required');
+  }
+
+  const existing = backfillInFlight.get(keyName);
+  if (existing) {
+    return existing;
+  }
+
+  const job = (async (): Promise<BackfillEquityResult> => {
+    await ensureSnapshotSourceColumn();
+    await ensureExchangeFillEventsTable();
+    const key = await getApiKeyRow(keyName);
+    const exchangeLower = String(key.exchange || '').toLowerCase();
+    if (!exchangeLower.includes('bybit')) {
+      throw new Error(`Backfill with exchange history is currently supported only for Bybit (got: ${key.exchange || 'unknown'})`);
+    }
+
+    const rangeOpts = {
+      maxDays: options?.maxDays,
+      fromMs: options?.fromMs,
+      toMs: options?.toMs,
+    };
+
+    const [history, fillsHistory] = await Promise.all([
+      fetchExchangeEquityHistory(keyName, rangeOpts),
+      fetchExchangeFillsHistory(keyName, rangeOpts).catch((error) => {
+        logger.warn(`fetchExchangeFillsHistory failed for ${keyName}: ${(error as Error).message}`);
+        return {
+          exchange: 'bybit',
+          fills: [] as Awaited<ReturnType<typeof fetchExchangeFillsHistory>>['fills'],
+          rawEvents: 0,
+          fromMs: 0,
+          toMs: 0,
+        };
+      }),
+    ]);
+
+    // Idempotent fills: replace previous backfill fills for this key
+    await mdb().run(
+      `DELETE FROM exchange_fill_events
+       WHERE api_key_id = ? AND COALESCE(event_origin, '') = 'exchange_backfill'`,
+      [key.id],
+    );
+    const fillsInserted = await insertInferredFillEvents(key.id, key.name, fillsHistory.fills);
+
+    const firstLive = await mdb().get(
+      `SELECT recorded_at FROM monitoring_snapshots
+       WHERE api_key_id = ?
+         AND COALESCE(source, 'live') != 'exchange_backfill'
+       ORDER BY datetime(recorded_at) ASC
+       LIMIT 1`,
+      [key.id],
+    ) as { recorded_at?: string } | undefined;
+    const firstLiveMs = firstLive?.recorded_at
+      ? Date.parse(String(firstLive.recorded_at).includes('T')
+        ? String(firstLive.recorded_at)
+        : `${String(firstLive.recorded_at).replace(' ', 'T')}Z`)
+      : NaN;
+
+    await mdb().run(
+      `DELETE FROM monitoring_snapshots
+       WHERE api_key_id = ? AND source = 'exchange_backfill'`,
+      [key.id],
+    );
+
+    const usable = history.points.filter((p) => {
+      if (!Number.isFinite(p.equityUsd) || p.equityUsd <= 0) return false;
+      if (Number.isFinite(firstLiveMs) && firstLiveMs > 0 && p.timeMs >= firstLiveMs) return false;
+      return true;
+    });
+
+    let inserted = 0;
+    let firstAt: string | null = null;
+    let lastAt: string | null = null;
+
+    if (usable.length > 0) {
+      const depositBase = usable[0].equityUsd;
+      let peak = usable[0].equityUsd;
+      for (const point of usable) {
+        peak = Math.max(peak, point.equityUsd);
+        const drawdownPercent = peak > 0
+          ? Math.max(0, ((peak - point.equityUsd) / peak) * 100)
+          : 0;
+        const pnlNet = point.equityUsd - depositBase;
+        const recordedAt = toSqliteUtc(point.timeMs);
+
+        await mdb().run(
+          `INSERT INTO monitoring_snapshots (
+            api_key_id,
+            api_key_name,
+            exchange,
+            equity_usd,
+            unrealized_pnl,
+            margin_used_usd,
+            margin_load_percent,
+            effective_leverage,
+            notional_usd,
+            drawdown_percent,
+            deposit_base_usd,
+            pnl_net_usd,
+            recorded_at,
+            source
+          ) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?, ?, ?, 'exchange_backfill')`,
+          [
+            key.id,
+            key.name,
+            key.exchange || history.exchange,
+            point.equityUsd,
+            drawdownPercent,
+            depositBase,
+            pnlNet,
+            recordedAt,
+          ],
+        );
+        inserted += 1;
+      }
+      firstAt = toSqliteUtc(usable[0].timeMs);
+      lastAt = toSqliteUtc(usable[usable.length - 1].timeMs);
+    }
+
+    logger.info(
+      `backfillMonitoringEquityFromExchange ${keyName}: equity=${inserted} fills=${fillsInserted} rawTx=${history.rawEvents} rawFills=${fillsHistory.rawEvents}`,
+    );
+
+    const noteParts = [
+      'Bybit: Transaction Log (wallet equity, без UPNL) + Execution List (fills → entry/exit).',
+      inserted > 0 ? `Equity +${inserted}` : 'Equity: новых точек нет',
+      fillsInserted > 0 ? `Fills +${fillsInserted}` : 'Fills: пусто или уже были',
+    ];
+
+    return {
+      apiKeyName: keyName,
+      exchange: history.exchange,
+      inserted,
+      skipped: history.points.length - usable.length,
+      rawEvents: history.rawEvents,
+      pointsFromExchange: history.points.length,
+      fillsInserted,
+      fillsRawEvents: fillsHistory.rawEvents,
+      fromMs: history.fromMs,
+      toMs: history.toMs,
+      firstAt,
+      lastAt,
+      note: noteParts.join(' '),
+    };
+  })();
+
+  backfillInFlight.set(keyName, job);
+  try {
+    return await job;
+  } finally {
+    backfillInFlight.delete(keyName);
+  }
 };

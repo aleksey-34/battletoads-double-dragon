@@ -20,7 +20,7 @@ import { getClientPreviewJobPayload } from '../../research/clientPreviewQueue';
 import { getPreset, listOfferIds } from '../../research/presetBuilder';
 import { ensureExchangeClientInitialized, removeExchangeClient } from '../../bot/exchange';
 import { saveApiKey } from '../../config/settings';
-import { getMonitoringBundle, getMonitoringLatest, recordMonitoringSnapshot } from '../../bot/monitoring';
+import { backfillMonitoringEquityFromExchange, getMonitoringBundle, getMonitoringLatest, recordMonitoringSnapshot } from '../../bot/monitoring';
 import {
   getAlgofundState,
   materializeAlgofundPortfolioFull,
@@ -1297,7 +1297,10 @@ router.delete('/client/api-keys/:id', authenticateClient, async (req, res) => {
 
     await db.run('DELETE FROM risk_settings WHERE api_key_id = ?', [apiKeyId]);
     await db.run('DELETE FROM strategies WHERE api_key_id = ?', [apiKeyId]);
-    await db.run('DELETE FROM monitoring_snapshots WHERE api_key_id = ?', [apiKeyId]);
+    {
+      const { deleteMonitoringDataForApiKey } = await import('../../monitoring/db');
+      await deleteMonitoringDataForApiKey(Number(apiKeyId));
+    }
     await db.run('DELETE FROM api_keys WHERE id = ?', [apiKeyId]);
     removeExchangeClient(keyName);
 
@@ -1692,6 +1695,54 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Client monitoring load error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** On-demand: pull equity history from exchange for the client's assigned key (Bybit). */
+router.post('/client/monitoring/backfill-equity', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user?.tenantId) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+    const tenantId = Number(session.user.tenantId);
+    const requestedApiKeyName = String(req.body?.apiKeyName || req.query.apiKeyName || '').trim();
+    const maxDaysRaw = Number.parseInt(String(req.body?.maxDays ?? '90'), 10);
+    const maxDays = Number.isFinite(maxDaysRaw) ? Math.min(180, Math.max(1, maxDaysRaw)) : 90;
+
+    const [tenant, strategyProfile, algofundProfile, tvAlertsProfile, tenantKeys] = await Promise.all([
+      db.get('SELECT assigned_api_key_name FROM tenants WHERE id = ?', [tenantId]) as Promise<{ assigned_api_key_name?: string } | undefined>,
+      db.get('SELECT assigned_api_key_name FROM strategy_client_profiles WHERE tenant_id = ?', [tenantId]) as Promise<{ assigned_api_key_name?: string } | undefined>,
+      db.get('SELECT assigned_api_key_name, execution_api_key_name FROM algofund_profiles WHERE tenant_id = ?', [tenantId]) as Promise<{ assigned_api_key_name?: string; execution_api_key_name?: string } | undefined>,
+      db.get('SELECT default_api_key_name FROM tv_alerts_profiles WHERE tenant_id = ?', [tenantId]) as Promise<{ default_api_key_name?: string } | undefined>,
+      db.all(
+        `SELECT name FROM api_keys WHERE name LIKE ? ORDER BY id DESC`,
+        [`tenant-${tenantId}-%`],
+      ) as Promise<Array<{ name?: string }>>,
+    ]);
+
+    const allowed = new Set<string>();
+    for (const name of [
+      String(tenant?.assigned_api_key_name || '').trim(),
+      String(strategyProfile?.assigned_api_key_name || '').trim(),
+      String(algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name || '').trim(),
+      String(tvAlertsProfile?.default_api_key_name || '').trim(),
+      ...(tenantKeys || []).map((r) => String(r.name || '').trim()),
+    ]) {
+      if (name) allowed.add(name);
+    }
+
+    const apiKeyName = requestedApiKeyName || [...allowed][0] || '';
+    if (!apiKeyName || !allowed.has(apiKeyName)) {
+      return res.status(403).json({ error: 'API key is not assigned to this client' });
+    }
+
+    const result = await backfillMonitoringEquityFromExchange(apiKeyName, { maxDays });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client monitoring backfill error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

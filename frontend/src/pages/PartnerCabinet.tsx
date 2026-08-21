@@ -11,7 +11,7 @@ import MonitoringChartPanel, {
   MonitoringTradeFrequencyPoint,
   ChartPeriodDays,
 } from '../components/MonitoringChartPanel';
-import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
+import { buildPublicPortfolioUrl, sharePublicPortfolioLink } from '../utils/portfolioLinks';
 
 type PartnerClient = {
   tenantId: number;
@@ -86,6 +86,7 @@ const PartnerCabinet: React.FC = () => {
   const [chartTradeFrequency, setChartTradeFrequency] = useState<MonitoringTradeFrequencyPoint[]>([]);
   const [chartTradeStats, setChartTradeStats] = useState<{ trades24h: number; lastTradeAt: string | null }>({ trades24h: 0, lastTradeAt: null });
   const [chartTradeMarkers, setChartTradeMarkers] = useState<MonitoringTradeMarker[]>([]);
+  const [chartBackfillLoading, setChartBackfillLoading] = useState(false);
 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshJob, setRefreshJob] = useState<PartnerRefreshJob | null>(null);
@@ -241,6 +242,30 @@ const PartnerCabinet: React.FC = () => {
     }
   };
 
+  const handleBackfillFromExchange = async () => {
+    if (!chartClient?.apiKeyName) return;
+    setChartBackfillLoading(true);
+    try {
+      const res = await axios.post(
+        `/api/saas/partner/monitoring/${encodeURIComponent(chartClient.apiKeyName)}/backfill-equity`,
+        { maxDays: 90 },
+      );
+      const inserted = Number(res.data?.inserted || 0);
+      const fillsInserted = Number(res.data?.fillsInserted || 0);
+      if (inserted > 0 || fillsInserted > 0) {
+        message.success(`С биржи: equity +${inserted}, fills +${fillsInserted}`);
+        setChartDays(0);
+        await loadChart(chartClient, 0);
+      } else {
+        message.info(String(res.data?.note || 'Новых точек с биржи нет'));
+      }
+    } catch (error: any) {
+      message.error(String(error?.response?.data?.error || error?.message || 'Не удалось подтянуть историю'));
+    } finally {
+      setChartBackfillLoading(false);
+    }
+  };
+
   const openChart = (client: PartnerClient) => {
     setChartClient(client);
     setChartOpen(true);
@@ -249,12 +274,7 @@ const PartnerCabinet: React.FC = () => {
   };
 
   const handleCopyPortfolioLink = async (clientSlug: string) => {
-    const ok = await copyPublicPortfolioLink(clientSlug);
-    if (ok) {
-      message.success('Ссылка на портфолио скопирована');
-    } else {
-      message.error('Не удалось скопировать ссылку');
-    }
+    await sharePublicPortfolioLink(clientSlug, { title: 'Ссылка на публичный мониторинг' });
   };
 
   useEffect(() => {
@@ -303,7 +323,7 @@ const PartnerCabinet: React.FC = () => {
       if (v == null) return '—';
       return <span style={{ color: Number(v) >= 0 ? '#16a34a' : '#dc2626' }}>${fmt(v)}</span>;
     } },
-    { title: 'Сделки 24ч', width: 100, render: (_: unknown, row: PartnerClient) => (
+    { title: 'Входы 24ч', width: 100, render: (_: unknown, row: PartnerClient) => (
       <Space direction="vertical" size={0}>
         <span>{row.trades24h ?? 0}</span>
         {row.lastTradeAt ? (
@@ -520,6 +540,9 @@ const PartnerCabinet: React.FC = () => {
             tradeMarkers={chartTradeMarkers}
             loading={chartLoading}
             currencyLabel="USD"
+            onBackfillFromExchange={handleBackfillFromExchange}
+            backfillLoading={chartBackfillLoading}
+            backfillSupported
           />
         </Spin>
       </Modal>

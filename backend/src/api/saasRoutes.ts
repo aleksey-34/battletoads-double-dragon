@@ -8,6 +8,7 @@ import {
   getPartnerTradesSummary,
   startPartnerLiveRefresh,
 } from '../saas/partnerService';
+import { backfillMonitoringEquityFromExchange } from '../bot/monitoring';
 import { runAdminTelegramReportNow } from '../notifications/adminTelegramReporter';
 import {
   getAlgofundState,
@@ -203,6 +204,23 @@ router.get('/partner/monitoring/:apiKeyName', requirePartnerOrAdmin, async (req,
   } catch (error) {
     const err = error as Error;
     logger.error(`Partner monitoring error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/partner/monitoring/:apiKeyName/backfill-equity', requirePartnerOrAdmin, async (req, res) => {
+  try {
+    const apiKeyName = String(req.params.apiKeyName || '').trim();
+    if (!apiKeyName) {
+      return res.status(400).json({ error: 'apiKeyName required' });
+    }
+    const maxDaysRaw = Number.parseInt(String(req.body?.maxDays ?? '90'), 10);
+    const maxDays = Number.isFinite(maxDaysRaw) ? Math.min(180, Math.max(1, maxDaysRaw)) : 90;
+    const result = await backfillMonitoringEquityFromExchange(apiKeyName, { maxDays });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Partner monitoring backfill error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

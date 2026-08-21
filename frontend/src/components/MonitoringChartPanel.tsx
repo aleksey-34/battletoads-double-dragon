@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Button, Checkbox, Segmented, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Checkbox, Segmented, Space, Table, Tag, Typography, message } from 'antd';
 import ChartComponent from './ChartComponent';
 
 export type MonitoringSnapshot = {
@@ -9,6 +9,8 @@ export type MonitoringSnapshot = {
   drawdown_percent?: number;
   deposit_base_usd?: number | null;
   pnl_net_usd?: number | null;
+  margin_load_percent?: number | null;
+  exchange?: string | null;
 };
 
 export type MonitoringTradeMarker = {
@@ -66,8 +68,24 @@ const PERIOD_OPTIONS: Array<{ label: string; value: ChartPeriodDays }> = [
   { label: '7д', value: 7 },
   { label: '30д', value: 30 },
   { label: '90д', value: 90 },
-  { label: 'Всё', value: 0 },
+  { label: 'Всё (БД)', value: 0 },
 ];
+
+const downloadCsv = (filename: string, headers: string[], rows: Array<Array<string | number | null | undefined>>) => {
+  const escape = (v: unknown) => {
+    const s = v == null ? '' : String(v);
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  const body = [headers, ...rows].map((row) => row.map(escape).join(',')).join('\n');
+  const blob = new Blob([`\uFEFF${body}`], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
 const fmt = (v: unknown, d = 2) => {
   const n = Number(v);
@@ -140,6 +158,10 @@ type MonitoringChartPanelProps = {
   tradeMarkers?: MonitoringTradeMarker[];
   loading?: boolean;
   currencyLabel?: string;
+  /** On-demand: pull equity history from the exchange (Bybit). */
+  onBackfillFromExchange?: () => void | Promise<void>;
+  backfillLoading?: boolean;
+  backfillSupported?: boolean;
 };
 
 const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
@@ -154,6 +176,9 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   tradeMarkers: _tradeMarkers = [],
   loading = false,
   currencyLabel = 'USD',
+  onBackfillFromExchange,
+  backfillLoading = false,
+  backfillSupported = true,
 }) => {
   const [showEquity, setShowEquity] = useState(true);
   const [showPnl, setShowPnl] = useState(false);
@@ -178,6 +203,56 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   const freqBucketLabel = tradeFrequency[0]?.bucket === 'hour' || chartDays === 1
     ? 'час'
     : 'день';
+
+  const coverageHint = useMemo(() => {
+    if (!Array.isArray(snapshots) || snapshots.length === 0) {
+      return chartDays === 0
+        ? 'В БД пока нет снимков. Нажмите «С биржи (весь период)» — подтянем историю с Bybit по запросу.'
+        : null;
+    }
+    const first = String(snapshots[0]?.recorded_at || '').trim();
+    const last = String(snapshots[snapshots.length - 1]?.recorded_at || '').trim();
+    if (chartDays !== 0) return null;
+    return `Сейчас в графике: ${first || '—'} → ${last || '—'} · ${snapshots.length} точек. Кнопка «С биржи» догружает историю с биржи до первого live-снимка.`;
+  }, [chartDays, snapshots]);
+
+  const handleDownloadCsv = () => {
+    if (!Array.isArray(snapshots) || snapshots.length === 0) {
+      message.warning('Нет снимков для выгрузки');
+      return;
+    }
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    downloadCsv(
+      `monitoring-snapshots-${stamp}.csv`,
+      ['recorded_at', 'equity_usd', 'unrealized_pnl', 'pnl_net_usd', 'drawdown_percent', 'margin_load_percent', 'exchange'],
+      snapshots.map((row) => [
+        row.recorded_at,
+        row.equity_usd,
+        row.unrealized_pnl,
+        row.pnl_net_usd,
+        row.drawdown_percent,
+        row.margin_load_percent,
+        row.exchange,
+      ]),
+    );
+    if (trades.length > 0) {
+      downloadCsv(
+        `monitoring-trades-${stamp}.csv`,
+        ['time', 'tradeType', 'side', 'symbol', 'price', 'size', 'fee', 'strategyId'],
+        trades.map((row) => [
+          row.time,
+          row.tradeType,
+          row.side,
+          row.symbol,
+          row.price,
+          row.size,
+          row.fee,
+          row.strategyId,
+        ]),
+      );
+    }
+    message.success(trades.length > 0 ? 'Скачаны CSV: снимки + сделки' : 'Скачан CSV со снимками');
+  };
 
   const freqSummary = useMemo(() => {
     if (freqPoints.length === 0) return null;
@@ -325,6 +400,32 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
           onChange={(v) => onChartDaysChange(Number(v) as ChartPeriodDays)}
         />
       </Space>
+
+      <Space wrap>
+        {onBackfillFromExchange ? (
+          <Button
+            size="small"
+            type="primary"
+            loading={backfillLoading}
+            disabled={!backfillSupported || loading}
+            onClick={() => void onBackfillFromExchange()}
+          >
+            С биржи (весь период)
+          </Button>
+        ) : null}
+        <Button size="small" onClick={handleDownloadCsv} disabled={!snapshots.length}>
+          Скачать CSV
+        </Button>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {backfillSupported === false
+            ? 'История с биржи пока только для Bybit.'
+            : '«С биржи» — по запросу: equity (Transaction Log) + fills (Execution List). Bybit. Не крутится в фоне.'}
+        </Typography.Text>
+      </Space>
+
+      {coverageHint ? (
+        <Alert type="info" showIcon message={coverageHint} />
+      ) : null}
 
       {localPeriodStats ? (
         <Space wrap size={[12, 8]} style={{

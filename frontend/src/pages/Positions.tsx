@@ -29,7 +29,7 @@ import MonitoringChartPanel, {
   MonitoringTradeFrequencyPoint,
   ChartPeriodDays,
 } from '../components/MonitoringChartPanel';
-import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
+import { buildPublicPortfolioUrl, sharePublicPortfolioLink } from '../utils/portfolioLinks';
 import {
   groupMonitoringByAccount,
   isCopyTradingKey,
@@ -201,6 +201,7 @@ const Positions: React.FC = () => {
   const [monChartTradeFrequency, setMonChartTradeFrequency] = useState<MonitoringTradeFrequencyPoint[]>([]);
   const [monChartTradeStats, setMonChartTradeStats] = useState<{ trades24h: number; lastTradeAt: string | null }>({ trades24h: 0, lastTradeAt: null });
   const [monChartTradeMarkers, setMonChartTradeMarkers] = useState<MonitoringTradeMarker[]>([]);
+  const [monChartBackfillLoading, setMonChartBackfillLoading] = useState(false);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(false);
   const [activeExchangeTab, setActiveExchangeTab] = useState<string>('');
   const [loadedKeys, setLoadedKeys] = useState<Set<string>>(() => new Set());
@@ -974,13 +975,42 @@ const Positions: React.FC = () => {
     [apiKeys, monChartKey],
   );
 
-  const handleCopyPortfolioLink = async (slug: string) => {
-    const ok = await copyPublicPortfolioLink(slug);
-    if (ok) {
-      message.success('Ссылка на портфолио скопирована');
-    } else {
-      message.error('Не удалось скопировать ссылку');
+  const monChartExchange = useMemo(
+    () => String(apiKeys.find((key) => key.name === monChartKey)?.exchange || '').toLowerCase(),
+    [apiKeys, monChartKey],
+  );
+  const monChartBackfillSupported = monChartExchange.includes('bybit');
+
+  const handleBackfillFromExchange = async () => {
+    if (!monChartKey) return;
+    setMonChartBackfillLoading(true);
+    try {
+      const res = await axios.post(
+        `/api/monitoring/${encodeURIComponent(monChartKey)}/backfill-equity`,
+        { maxDays: 90 },
+      );
+      const inserted = Number(res.data?.inserted || 0);
+      const fillsInserted = Number(res.data?.fillsInserted || 0);
+      const note = String(res.data?.note || '');
+      if (inserted > 0 || fillsInserted > 0) {
+        message.success(
+          `С биржи: equity +${inserted}, fills +${fillsInserted}`
+          + (res.data?.firstAt ? ` (${res.data.firstAt} → ${res.data.lastAt})` : ''),
+        );
+        setMonChartDays(0);
+        await loadMonChart(monChartKey, 0);
+      } else {
+        message.info(note || 'Новых точек с биржи нет');
+      }
+    } catch (error: any) {
+      message.error(String(error?.response?.data?.error || error?.message || 'Не удалось подтянуть историю с биржи'));
+    } finally {
+      setMonChartBackfillLoading(false);
     }
+  };
+
+  const handleCopyPortfolioLink = async (slug: string) => {
+    await sharePublicPortfolioLink(slug, { title: 'Ссылка на публичный мониторинг' });
   };
 
   const monitoringColumns = [
@@ -1605,6 +1635,9 @@ const Positions: React.FC = () => {
           tradeMarkers={monChartTradeMarkers}
           loading={monChartLoading}
           currencyLabel="USD"
+          onBackfillFromExchange={handleBackfillFromExchange}
+          backfillLoading={monChartBackfillLoading}
+          backfillSupported={monChartBackfillSupported}
         />
       </Modal>
     </div>

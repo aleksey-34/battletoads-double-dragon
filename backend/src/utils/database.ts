@@ -118,21 +118,6 @@ export const initDB = async () => {
       FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
     );
 
-    CREATE TABLE IF NOT EXISTS monitoring_snapshots (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      api_key_id INTEGER NOT NULL,
-      exchange TEXT,
-      equity_usd REAL DEFAULT 0,
-      unrealized_pnl REAL DEFAULT 0,
-      margin_used_usd REAL DEFAULT 0,
-      margin_load_percent REAL DEFAULT 0,
-      effective_leverage REAL DEFAULT 0,
-      notional_usd REAL DEFAULT 0,
-      drawdown_percent REAL DEFAULT 0,
-      recorded_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
-    );
-
     CREATE TABLE IF NOT EXISTS backtest_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       api_key_name TEXT NOT NULL,
@@ -232,9 +217,6 @@ export const initDB = async () => {
       FOREIGN KEY (tenant_id) REFERENCES tenants(id),
       FOREIGN KEY (materialized_system_id) REFERENCES trading_systems(id)
     );
-
-    CREATE INDEX IF NOT EXISTS idx_monitoring_snapshots_api_time
-      ON monitoring_snapshots (api_key_id, recorded_at);
 
     CREATE INDEX IF NOT EXISTS idx_backtest_runs_created_at
       ON backtest_runs (created_at DESC);
@@ -930,6 +912,22 @@ export const initDB = async () => {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_live_trade_events_source_trade_id
       ON live_trade_events (source_trade_id);
   `);
+
+  // Monitoring history lives in monitoring.db (isolated WAL / busy path).
+  const {
+    initMonitoringDb,
+    migrateMonitoringFromMainDb,
+    attachMonitoringToMainDb,
+  } = await import('../monitoring/db');
+  await initMonitoringDb();
+  const migrated = await migrateMonitoringFromMainDb(db);
+  if (!migrated.skipped) {
+    const logger = (await import('./logger')).default;
+    logger.info(
+      `Monitoring DB migrate: snapshots=${migrated.snapshots} fills=${migrated.fills}`,
+    );
+  }
+  await attachMonitoringToMainDb(db);
 };
 
 export { db };

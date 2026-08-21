@@ -32,6 +32,7 @@
 |----------|-------------|--------|
 | **Основная БД** | `/opt/battletoads-double-dragon/backend/database.db` | Клиенты, API-ключи, стратегии, витрина, offer store |
 | **Research БД** | `backend/research.db` или `data/research.db` | Presets / sweep-кэш |
+| **Monitoring БД** | `backend/monitoring.db` | Equity snapshots + exchange fills (отдельно от main) |
 | **`.env`** | `/opt/battletoads-double-dragon/.env` | Пароли, Telegram, JWT, порты |
 | **`.auth-password.json`** | `backend/.auth-password.json` | Хэш пароля админ-дашборда |
 | **SSL** | `/etc/letsencrypt/` | HTTPS для `battletoads.top` |

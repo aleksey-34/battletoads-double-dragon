@@ -3359,6 +3359,258 @@ export const getRecentTrades = async (apiKeyName: string, symbol?: string, limit
     .slice(0, safeLimit);
 };
 
+export type ExchangeEquityHistoryPoint = {
+  timeMs: number;
+  equityUsd: number;
+};
+
+const STABLE_COINS = new Set(['USDT', 'USDC', 'USD']);
+/** Bybit transaction-log window is max 7 days per request. */
+const BYBIT_TX_LOG_WINDOW_MS = 7 * 86_400_000;
+const BYBIT_TX_LOG_PAGE_LIMIT = 50;
+const BYBIT_TX_LOG_MAX_PAGES = 250;
+
+/**
+ * On-demand equity series from the exchange (Bybit first).
+ * Uses Unified Account transaction log `cashBalance` (wallet after each event).
+ * Does NOT include open UPNL — historical mark equity is not available from this endpoint.
+ */
+export const fetchExchangeEquityHistory = async (
+  apiKeyName: string,
+  options?: { fromMs?: number; toMs?: number; maxDays?: number },
+): Promise<{
+  exchange: string;
+  points: ExchangeEquityHistoryPoint[];
+  rawEvents: number;
+  fromMs: number;
+  toMs: number;
+}> => {
+  await ensureExchangeClientInitialized(apiKeyName);
+
+  if (!clients[apiKeyName]?.client) {
+    throw new Error(`Exchange equity history is currently supported only for Bybit (key: ${apiKeyName})`);
+  }
+
+  const nowMs = Date.now();
+  const maxDays = Math.min(180, Math.max(1, Math.floor(Number(options?.maxDays) || 90)));
+  const toMs = Math.min(nowMs, Number.isFinite(Number(options?.toMs)) ? Math.floor(Number(options?.toMs)) : nowMs);
+  const defaultFrom = toMs - maxDays * 86_400_000;
+  const fromMs = Math.max(
+    0,
+    Number.isFinite(Number(options?.fromMs)) ? Math.floor(Number(options?.fromMs)) : defaultFrom,
+  );
+  if (toMs <= fromMs) {
+    throw new Error('Invalid equity history range');
+  }
+
+  const events: Array<{ timeMs: number; currency: string; cashBalance: number }> = [];
+  let pages = 0;
+
+  for (let windowStart = fromMs; windowStart < toMs; windowStart += BYBIT_TX_LOG_WINDOW_MS) {
+    const windowEnd = Math.min(toMs, windowStart + BYBIT_TX_LOG_WINDOW_MS);
+    let cursor: string | undefined;
+    let guard = 0;
+
+    do {
+      if (pages >= BYBIT_TX_LOG_MAX_PAGES) {
+        logger.warn(`fetchExchangeEquityHistory ${apiKeyName}: hit max pages (${BYBIT_TX_LOG_MAX_PAGES})`);
+        break;
+      }
+      pages += 1;
+      guard += 1;
+
+      const response: any = await callPrivateWithDemoFallback(
+        apiKeyName,
+        `getTransactionLog:${windowStart}-${windowEnd}:${cursor || '0'}`,
+        (client) =>
+          client.getTransactionLog({
+            accountType: 'UNIFIED',
+            startTime: windowStart,
+            endTime: windowEnd,
+            limit: BYBIT_TX_LOG_PAGE_LIMIT,
+            ...(cursor ? { cursor } : {}),
+          }),
+      );
+
+      if (!isBybitSuccess(response)) {
+        throw formatBybitError(response, 'getTransactionLog');
+      }
+
+      const list = Array.isArray(response?.result?.list) ? response.result.list : [];
+      for (const row of list) {
+        const currency = String(row?.currency || '').toUpperCase();
+        if (!STABLE_COINS.has(currency)) continue;
+        const timeMs = Number(row?.transactionTime);
+        const cashBalance = Number(row?.cashBalance);
+        if (!Number.isFinite(timeMs) || timeMs <= 0 || !Number.isFinite(cashBalance)) continue;
+        events.push({ timeMs, currency, cashBalance });
+      }
+
+      const nextCursor = String(response?.result?.nextPageCursor || '').trim();
+      cursor = nextCursor && nextCursor !== cursor ? nextCursor : undefined;
+    } while (cursor && guard < 80);
+  }
+
+  events.sort((a, b) => a.timeMs - b.timeMs || a.currency.localeCompare(b.currency));
+
+  const balances = new Map<string, number>();
+  const rawPoints: ExchangeEquityHistoryPoint[] = [];
+  for (const ev of events) {
+    balances.set(ev.currency, ev.cashBalance);
+    let equityUsd = 0;
+    for (const coin of STABLE_COINS) {
+      equityUsd += balances.get(coin) || 0;
+    }
+    if (equityUsd <= 0) continue;
+    rawPoints.push({ timeMs: ev.timeMs, equityUsd });
+  }
+
+  // Downsample to ~1 point / 15 minutes (keep last in bucket) to limit DB size
+  const bucketMs = 15 * 60_000;
+  const byBucket = new Map<number, ExchangeEquityHistoryPoint>();
+  for (const point of rawPoints) {
+    const bucket = Math.floor(point.timeMs / bucketMs) * bucketMs;
+    byBucket.set(bucket, { timeMs: point.timeMs, equityUsd: point.equityUsd });
+  }
+  const points = Array.from(byBucket.values()).sort((a, b) => a.timeMs - b.timeMs);
+
+  return {
+    exchange: 'bybit',
+    points,
+    rawEvents: events.length,
+    fromMs,
+    toMs,
+  };
+};
+
+/**
+ * On-demand fill history from Bybit execution list (7d windows + cursor).
+ * Account-level (all symbols in linear USDT/USDC), not per-strategy.
+ */
+export const fetchExchangeFillsHistory = async (
+  apiKeyName: string,
+  options?: { fromMs?: number; toMs?: number; maxDays?: number },
+): Promise<{
+  exchange: string;
+  fills: NormalizedTrade[];
+  rawEvents: number;
+  fromMs: number;
+  toMs: number;
+}> => {
+  await ensureExchangeClientInitialized(apiKeyName);
+
+  if (!clients[apiKeyName]?.client) {
+    throw new Error(`Exchange fills history is currently supported only for Bybit (key: ${apiKeyName})`);
+  }
+
+  const nowMs = Date.now();
+  const maxDays = Math.min(180, Math.max(1, Math.floor(Number(options?.maxDays) || 90)));
+  const toMs = Math.min(nowMs, Number.isFinite(Number(options?.toMs)) ? Math.floor(Number(options?.toMs)) : nowMs);
+  const defaultFrom = toMs - maxDays * 86_400_000;
+  const fromMs = Math.max(
+    0,
+    Number.isFinite(Number(options?.fromMs)) ? Math.floor(Number(options?.fromMs)) : defaultFrom,
+  );
+  if (toMs <= fromMs) {
+    throw new Error('Invalid fills history range');
+  }
+
+  const windowMs = 7 * 86_400_000;
+  const pageLimit = 100;
+  const maxPages = 400;
+  const collected: any[] = [];
+  let pages = 0;
+
+  const requestBases: Array<Record<string, unknown>> = [
+    { category: 'linear', settleCoin: 'USDT' },
+    { category: 'linear', settleCoin: 'USDC' },
+  ];
+
+  for (const base of requestBases) {
+    for (let windowStart = fromMs; windowStart < toMs; windowStart += windowMs) {
+      const windowEnd = Math.min(toMs, windowStart + windowMs);
+      let cursor: string | undefined;
+      let guard = 0;
+      do {
+        if (pages >= maxPages) break;
+        pages += 1;
+        guard += 1;
+
+        const response: any = await callPrivateWithDemoFallback(
+          apiKeyName,
+          `getExecutionList:hist:${JSON.stringify(base)}:${windowStart}-${windowEnd}:${cursor || '0'}`,
+          (client) =>
+            client.getExecutionList({
+              ...base,
+              startTime: windowStart,
+              endTime: windowEnd,
+              limit: pageLimit,
+              ...(cursor ? { cursor } : {}),
+            } as any),
+        );
+
+        if (!isBybitSuccess(response)) {
+          throw formatBybitError(response, 'getExecutionList');
+        }
+
+        const list = Array.isArray(response?.result?.list) ? response.result.list : [];
+        collected.push(...list);
+
+        const nextCursor = String(response?.result?.nextPageCursor || '').trim();
+        cursor = nextCursor && nextCursor !== cursor ? nextCursor : undefined;
+      } while (cursor && guard < 80);
+    }
+  }
+
+  const fills = collected
+    .map((trade: any) => {
+      const sideRaw = String(trade?.side || '').toLowerCase();
+      const side: 'Buy' | 'Sell' = sideRaw === 'buy' ? 'Buy' : 'Sell';
+      const qty = Number(trade?.execQty ?? trade?.qty ?? 0);
+      const price = Number(trade?.execPrice ?? trade?.price ?? 0);
+      const notionalRaw = Number(trade?.execValue ?? trade?.orderValue ?? 0);
+      const fee = Number(trade?.execFee ?? trade?.fee ?? 0);
+      const realizedPnl = Number(trade?.closedPnl ?? trade?.realizedPnl ?? 0);
+      const timestamp = Number(trade?.execTime ?? trade?.tradeTime ?? 0);
+      const tradeId = String(trade?.execId || trade?.tradeId || '');
+      const orderId = String(trade?.orderId || '');
+      const normalizedSymbol = toUiSymbol(trade?.symbol || '');
+      const feeCurrency = String(trade?.feeCurrency || trade?.feeCoin || '');
+      const isMaker = String(trade?.isMaker || '').toLowerCase() === 'true';
+      const notional = Number.isFinite(notionalRaw) && notionalRaw > 0
+        ? Math.abs(notionalRaw)
+        : (Number.isFinite(price) && Number.isFinite(qty) ? Math.abs(price * qty) : 0);
+
+      return {
+        tradeId,
+        orderId,
+        symbol: normalizedSymbol,
+        side,
+        qty: String(Number.isFinite(qty) ? Math.abs(qty) : 0),
+        price: String(Number.isFinite(price) ? price : 0),
+        notional: String(Number.isFinite(notional) ? notional : 0),
+        fee: String(Number.isFinite(fee) ? Math.abs(fee) : 0),
+        feeCurrency,
+        realizedPnl: String(Number.isFinite(realizedPnl) ? realizedPnl : 0),
+        isMaker,
+        timestamp: String(Number.isFinite(timestamp) ? Math.floor(timestamp) : 0),
+      } as NormalizedTrade;
+    })
+    .filter((trade) => Boolean(trade.tradeId && trade.timestamp !== '0'));
+
+  const deduped = Array.from(
+    new Map(fills.map((trade) => [`${trade.symbol}:${trade.tradeId}`, trade])).values(),
+  ).sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
+
+  return {
+    exchange: 'bybit',
+    fills: deduped,
+    rawEvents: collected.length,
+    fromMs,
+    toMs,
+  };
+};
+
 export const closePositionPercent = async (
   apiKeyName: string,
   symbol: string,

@@ -119,7 +119,7 @@ const normalizeMetricsRow = (row: any): TradingSystemMetrics | undefined => {
 const getTradingSystemMetrics = async (apiKeyName: string, apiKeyId: number): Promise<TradingSystemMetrics | undefined> => {
   const latest = await db.get(
     `SELECT equity_usd, unrealized_pnl, margin_load_percent, drawdown_percent, effective_leverage, recorded_at
-     FROM monitoring_snapshots
+     FROM mon.monitoring_snapshots
      WHERE api_key_id = ?
      ORDER BY datetime(recorded_at) DESC
      LIMIT 1`,

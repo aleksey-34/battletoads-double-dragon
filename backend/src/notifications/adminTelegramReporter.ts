@@ -200,19 +200,19 @@ const buildRuntimeClientLines = async (periodHours: number): Promise<string[]> =
      LEFT JOIN api_keys a ON a.name = ac.execution_api_key_name
      LEFT JOIN (
        SELECT m1.api_key_id, m1.equity_usd, m1.unrealized_pnl, m1.margin_load_percent, m1.drawdown_percent
-       FROM monitoring_snapshots m1
+       FROM mon.monitoring_snapshots m1
        JOIN (
          SELECT api_key_id, MAX(datetime(recorded_at)) AS max_at
-         FROM monitoring_snapshots
+         FROM mon.monitoring_snapshots
          GROUP BY api_key_id
        ) mx ON mx.api_key_id = m1.api_key_id AND datetime(m1.recorded_at) = mx.max_at
      ) ms_latest ON ms_latest.api_key_id = a.id
      LEFT JOIN (
        SELECT m2.api_key_id, m2.equity_usd
-       FROM monitoring_snapshots m2
+       FROM mon.monitoring_snapshots m2
        JOIN (
          SELECT api_key_id, MIN(datetime(recorded_at)) AS min_at
-         FROM monitoring_snapshots
+         FROM mon.monitoring_snapshots
          WHERE datetime(recorded_at) >= datetime('now', ?)
          GROUP BY api_key_id
        ) mn ON mn.api_key_id = m2.api_key_id AND datetime(m2.recorded_at) = mn.min_at
@@ -321,19 +321,19 @@ const buildAccountLines = async (periodHours: number, runtimeOnly = false): Prom
      FROM api_keys a
      LEFT JOIN (
        SELECT m1.api_key_id, m1.equity_usd, m1.unrealized_pnl, m1.margin_load_percent, m1.drawdown_percent
-       FROM monitoring_snapshots m1
+       FROM mon.monitoring_snapshots m1
        JOIN (
          SELECT api_key_id, MAX(datetime(recorded_at)) AS max_at
-         FROM monitoring_snapshots
+         FROM mon.monitoring_snapshots
          GROUP BY api_key_id
        ) mx ON mx.api_key_id = m1.api_key_id AND datetime(m1.recorded_at) = mx.max_at
      ) ms_latest ON ms_latest.api_key_id = a.id
      LEFT JOIN (
        SELECT m2.api_key_id, m2.equity_usd
-       FROM monitoring_snapshots m2
+       FROM mon.monitoring_snapshots m2
        JOIN (
          SELECT api_key_id, MIN(datetime(recorded_at)) AS min_at
-         FROM monitoring_snapshots
+         FROM mon.monitoring_snapshots
          WHERE datetime(recorded_at) >= datetime('now', ?)
          GROUP BY api_key_id
        ) mn ON mn.api_key_id = m2.api_key_id AND datetime(m2.recorded_at) = mn.min_at
@@ -613,7 +613,7 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
            THEN ROUND((peak.peak_equity - COALESCE(ms.equity_usd,0)) / peak.peak_equity * 100, 2)
          ELSE 0
        END AS period_dd,
-       (SELECT COUNT(*) FROM monitoring_snapshots ms2 WHERE ms2.api_key_id = a.id AND datetime(ms2.recorded_at) >= datetime('now', ?)) AS snap_count,
+       (SELECT COUNT(*) FROM mon.monitoring_snapshots ms2 WHERE ms2.api_key_id = a.id AND datetime(ms2.recorded_at) >= datetime('now', ?)) AS snap_count,
        (SELECT COUNT(*) FROM live_trade_events lte JOIN strategies s ON s.id=lte.strategy_id
          WHERE s.api_key_id = a.id AND lte.actual_time >= (strftime('%s','now', ?) * 1000)) AS trades_period,
        (SELECT COUNT(*) FROM live_trade_events lte JOIN strategies s ON s.id=lte.strategy_id
@@ -645,23 +645,23 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
      LEFT JOIN api_keys a ON a.name = COALESCE(NULLIF(ap.execution_api_key_name,''), NULLIF(t.assigned_api_key_name,''), NULLIF(ap.assigned_api_key_name,''))
      LEFT JOIN (
        SELECT m1.api_key_id, m1.equity_usd, m1.unrealized_pnl, m1.margin_load_percent, m1.drawdown_percent, m1.recorded_at
-       FROM monitoring_snapshots m1
-       JOIN (SELECT api_key_id, MAX(datetime(recorded_at)) AS mx FROM monitoring_snapshots GROUP BY api_key_id) j
+       FROM mon.monitoring_snapshots m1
+       JOIN (SELECT api_key_id, MAX(datetime(recorded_at)) AS mx FROM mon.monitoring_snapshots GROUP BY api_key_id) j
          ON j.api_key_id = m1.api_key_id AND datetime(m1.recorded_at) = j.mx
      ) ms ON ms.api_key_id = a.id
      LEFT JOIN (
        SELECT ms0.api_key_id, ms0.equity_usd
-       FROM monitoring_snapshots ms0
+       FROM mon.monitoring_snapshots ms0
        JOIN (
          SELECT api_key_id, MIN(datetime(recorded_at)) AS min_at
-         FROM monitoring_snapshots
+         FROM mon.monitoring_snapshots
          WHERE datetime(recorded_at) >= datetime('now', ?)
          GROUP BY api_key_id
        ) mn ON mn.api_key_id = ms0.api_key_id AND datetime(ms0.recorded_at) = mn.min_at
      ) ms_start ON ms_start.api_key_id = a.id
      LEFT JOIN (
        SELECT api_key_id, MAX(equity_usd) AS peak_equity
-       FROM monitoring_snapshots
+       FROM mon.monitoring_snapshots
        WHERE datetime(recorded_at) >= datetime('now', ?)
          AND ABS(COALESCE(unrealized_pnl, 0)) < equity_usd * 0.20
        GROUP BY api_key_id
@@ -851,12 +851,12 @@ const equityOnDate = async (apiKeyName: string, day: string, edge: 'start' | 'en
   const row = await db.get(
     edge === 'start'
       ? `SELECT m.equity_usd AS eq
-         FROM monitoring_snapshots m
+         FROM mon.monitoring_snapshots m
          JOIN api_keys a ON a.id = m.api_key_id
          WHERE a.name = ? AND date(m.recorded_at) = date(?)
          ORDER BY datetime(m.recorded_at) ASC LIMIT 1`
       : `SELECT m.equity_usd AS eq
-         FROM monitoring_snapshots m
+         FROM mon.monitoring_snapshots m
          JOIN api_keys a ON a.id = m.api_key_id
          WHERE a.name = ? AND date(m.recorded_at) = date(?)
          ORDER BY datetime(m.recorded_at) DESC LIMIT 1`,

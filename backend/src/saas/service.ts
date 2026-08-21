@@ -20315,7 +20315,7 @@ export const getAlgofundSystemHealthReport = async (options: {
 
     const latestSnapshot = await db.get(
       `SELECT equity_usd, unrealized_pnl, notional_usd, margin_load_percent, recorded_at
-       FROM monitoring_snapshots
+       FROM mon.monitoring_snapshots
        WHERE api_key_id = ?
        ORDER BY datetime(recorded_at) DESC
        LIMIT 1`,

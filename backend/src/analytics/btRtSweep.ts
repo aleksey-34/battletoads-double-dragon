@@ -183,7 +183,7 @@ const computeSnapshotForKey = async (
   snapshotDateUtc: string,
 ): Promise<BtRtSnapshot> => {
   // Date range: midnight-to-midnight UTC for snapshot_date
-  // monitoring_snapshots.recorded_at is stored as 'YYYY-MM-DD HH:MM:SS' (SQLite default, no T)
+  // mon.monitoring_snapshots.recorded_at is stored as 'YYYY-MM-DD HH:MM:SS' (SQLite default, no T)
   const dateStart = `${snapshotDateUtc} 00:00:00`;
   const dateEnd = `${snapshotDateUtc} 23:59:59`;
   // live_trade_events.created_at is unix milliseconds (INTEGER)
@@ -193,7 +193,7 @@ const computeSnapshotForKey = async (
   // --- RT: latest equity for the day ---
   const latestSnap = await db.get(
     `SELECT equity_usd, unrealized_pnl, drawdown_percent, effective_leverage
-     FROM monitoring_snapshots
+     FROM mon.monitoring_snapshots
      WHERE api_key_id = ? AND recorded_at BETWEEN ? AND ?
      ORDER BY id DESC LIMIT 1`,
     [apiKeyId, dateStart, dateEnd]
@@ -202,7 +202,7 @@ const computeSnapshotForKey = async (
   // RT: first equity of the day (start of period)
   const firstSnap = await db.get(
     `SELECT equity_usd
-     FROM monitoring_snapshots
+     FROM mon.monitoring_snapshots
      WHERE api_key_id = ? AND recorded_at BETWEEN ? AND ?
      ORDER BY id ASC LIMIT 1`,
     [apiKeyId, dateStart, dateEnd]
@@ -365,7 +365,7 @@ const computeSnapshotForKey = async (
 
   const marginRow = await db.get(
     `SELECT AVG(margin_load_percent) AS avg_margin_load
-     FROM monitoring_snapshots
+     FROM mon.monitoring_snapshots
      WHERE api_key_id = ? AND recorded_at BETWEEN ? AND ?`,
     [apiKeyId, dateStart, dateEnd]
   ) as { avg_margin_load?: number } | undefined;
@@ -373,7 +373,7 @@ const computeSnapshotForKey = async (
   // Realized PnL approximation: equity change excluding unrealized PnL delta.
   // realizedPnl = (endEquity - startEquity) - (endUnrealized - startUnrealized)
   const firstSnapUnrealized = await db.get(
-    `SELECT unrealized_pnl FROM monitoring_snapshots
+    `SELECT unrealized_pnl FROM mon.monitoring_snapshots
      WHERE api_key_id = ? AND recorded_at BETWEEN ? AND ?
      ORDER BY id ASC LIMIT 1`,
     [apiKeyId, dateStart, dateEnd]

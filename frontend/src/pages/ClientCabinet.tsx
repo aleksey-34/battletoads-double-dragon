@@ -45,7 +45,7 @@ import TradingSystemCard from '../components/storefront/TradingSystemCard';
 import PortfolioCard from '../components/storefront/PortfolioCard';
 import { equityPointsToSeries as storefrontEquitySeries } from '../components/storefront/storefrontMetrics';
 import { useI18n } from '../i18n';
-import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
+import { buildPublicPortfolioUrl, sharePublicPortfolioLink } from '../utils/portfolioLinks';
 
 type ProductMode = 'strategy_client' | 'algofund_client' | 'dual';
 type Level3 = 'low' | 'medium' | 'high';
@@ -1303,12 +1303,7 @@ const ClientCabinet: React.FC = () => {
       messageApi.warning('Slug кабинета ещё не готов');
       return;
     }
-    const ok = await copyPublicPortfolioLink(slug);
-    if (ok) {
-      messageApi.success('Публичная ссылка скопирована');
-    } else {
-      messageApi.error('Не удалось скопировать ссылку');
-    }
+    await sharePublicPortfolioLink(slug, { title: 'Публичная ссылка мониторинга' });
   };
 
   const goToApiKeysSettings = () => {
@@ -1959,6 +1954,34 @@ const ClientCabinet: React.FC = () => {
     }
     setMonitoringModalVisible(true);
     void refreshMonitoring(monitoringDays, fallbackKey || undefined);
+  };
+
+  const handleBackfillFromExchange = async () => {
+    const key = String(monitoringApiKeyName || '').trim();
+    if (!key) {
+      messageApi.warning('Сначала выберите API-ключ');
+      return;
+    }
+    setActionLoading('monitoring-backfill');
+    try {
+      const res = await axios.post('/api/client/monitoring/backfill-equity', {
+        apiKeyName: key,
+        maxDays: 90,
+      });
+      const inserted = Number(res.data?.inserted || 0);
+      const fillsInserted = Number(res.data?.fillsInserted || 0);
+      if (inserted > 0 || fillsInserted > 0) {
+        messageApi.success(`С биржи: equity +${inserted}, fills +${fillsInserted}`);
+        setMonitoringDays(0);
+        await refreshMonitoring(0, key);
+      } else {
+        messageApi.info(String(res.data?.note || 'Новых точек с биржи нет'));
+      }
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось подтянуть историю с биржи'));
+    } finally {
+      setActionLoading('');
+    }
   };
 
   const monitoringKeyOptions = useMemo(() => {
@@ -3162,8 +3185,15 @@ const ClientCabinet: React.FC = () => {
           tradeFrequency={Array.isArray(monitoring?.tradeFrequency) ? (monitoring?.tradeFrequency || []) : []}
           trades24h={Number(monitoring?.tradeStats?.trades24h || 0)}
           lastTradeAt={monitoring?.tradeStats?.lastTradeAt || null}
-          loading={actionLoading === 'monitoring-refresh'}
+          loading={actionLoading === 'monitoring-refresh' || actionLoading === 'monitoring-backfill'}
           currencyLabel="USD"
+          onBackfillFromExchange={handleBackfillFromExchange}
+          backfillLoading={actionLoading === 'monitoring-backfill'}
+          backfillSupported={String(
+            monitoringKeyOptions.find((k) => k.name === monitoringApiKeyName)?.exchange
+            || clientApiKeys.find((k) => k.name === monitoringApiKeyName)?.exchange
+            || '',
+          ).toLowerCase().includes('bybit')}
         />
       </Modal>
 

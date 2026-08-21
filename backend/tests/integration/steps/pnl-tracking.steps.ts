@@ -18,12 +18,16 @@ const getDb = async () => {
   return db;
 };
 
-// ─── Migration helper: runs the same ALTER TABLE statements as monitoring.ts ─
+const getMonDb = async () => {
+  const { initMonitoringDb, getMonitoringDb } = await import('../../../src/monitoring/db');
+  await initMonitoringDb();
+  return getMonitoringDb();
+};
+
+// ─── Migration helper: monitoring schema lives in monitoring.db ─
 
 const runPnlMigration = async () => {
-  const db = await getDb();
-  try { await db.exec('ALTER TABLE monitoring_snapshots ADD COLUMN deposit_base_usd REAL DEFAULT NULL'); } catch { /* already exists */ }
-  try { await db.exec('ALTER TABLE monitoring_snapshots ADD COLUMN pnl_net_usd REAL DEFAULT NULL'); } catch { /* already exists */ }
+  await getMonDb();
 };
 
 // ─── Ensure test API key ──────────────────────────────────────────────────────
@@ -75,7 +79,7 @@ When('I run the PnL migration for monitoring_snapshots again', async () => {
 });
 
 Then('monitoring_snapshots table should have column {string}', async (columnName: string) => {
-  const db = await getDb();
+  const db = await getMonDb();
   const cols: any[] = await db.all(`PRAGMA table_info(monitoring_snapshots)`);
   const found = cols.some((c: any) => c.name === columnName);
   assert.ok(
@@ -117,8 +121,8 @@ Then('pnl_net_usd should be {float}', (expected: number) => {
 // ─── Persistence steps ────────────────────────────────────────────────────────
 
 When('I insert first monitoring snapshot for {string} with equity {float}', async (keyName: string, equity: number) => {
-  const db = await getDb();
   const keyId = await ensurePnlTestKey(keyName);
+  const db = await getMonDb();
 
   // Clean slate for this key
   await db.run('DELETE FROM monitoring_snapshots WHERE api_key_id = ?', [keyId]);
@@ -140,8 +144,8 @@ When('I insert first monitoring snapshot for {string} with equity {float}', asyn
 });
 
 When('I insert second monitoring snapshot for {string} with equity {float}', async (keyName: string, equity: number) => {
-  const db = await getDb();
   const keyId = await ensurePnlTestKey(keyName);
+  const db = await getMonDb();
 
   // Get depositBase from first snapshot
   const firstSnap = await db.get(
@@ -164,7 +168,7 @@ When('I insert second monitoring snapshot for {string} with equity {float}', asy
 });
 
 Then('the stored deposit_base_usd should equal equity {float}', async (expected: number) => {
-  const db = await getDb();
+  const db = await getMonDb();
   const row = await db.get('SELECT deposit_base_usd FROM monitoring_snapshots WHERE id = ?', [firstSnapshotId]);
   assert.ok(row, 'First snapshot not found');
   assert.ok(
@@ -174,7 +178,7 @@ Then('the stored deposit_base_usd should equal equity {float}', async (expected:
 });
 
 Then('the second snapshot deposit_base_usd should still be {float}', async (expected: number) => {
-  const db = await getDb();
+  const db = await getMonDb();
   const row = await db.get('SELECT deposit_base_usd FROM monitoring_snapshots WHERE id = ?', [secondSnapshotId]);
   assert.ok(row, 'Second snapshot not found');
   assert.ok(
@@ -184,7 +188,7 @@ Then('the second snapshot deposit_base_usd should still be {float}', async (expe
 });
 
 Then('the second snapshot pnl_net_usd should be {float}', async (expected: number) => {
-  const db = await getDb();
+  const db = await getMonDb();
   const row = await db.get('SELECT pnl_net_usd FROM monitoring_snapshots WHERE id = ?', [secondSnapshotId]);
   assert.ok(row, 'Second snapshot not found');
   assert.ok(
