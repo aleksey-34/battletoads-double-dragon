@@ -22,6 +22,40 @@ const loadApiKeysWithActiveStrategies = async (): Promise<string[]> => {
     .filter((name) => name.length > 0);
 };
 
+/** Keys assigned to client cabinets (even with no active strategies yet). */
+const loadApiKeysAssignedToTenants = async (): Promise<string[]> => {
+  const rows = await db.all(
+    `SELECT DISTINCT key_name FROM (
+       SELECT TRIM(COALESCE(NULLIF(ap.execution_api_key_name, ''), ap.assigned_api_key_name, '')) AS key_name
+       FROM algofund_profiles ap
+       JOIN tenants t ON t.id = ap.tenant_id
+       WHERE t.status != 'deleted'
+       UNION
+       SELECT TRIM(COALESCE(sp.assigned_api_key_name, '')) AS key_name
+       FROM strategy_client_profiles sp
+       JOIN tenants t ON t.id = sp.tenant_id
+       WHERE t.status != 'deleted'
+       UNION
+       SELECT TRIM(COALESCE(t.assigned_api_key_name, '')) AS key_name
+       FROM tenants t
+       WHERE t.status != 'deleted'
+     ) q
+     WHERE key_name IS NOT NULL AND length(key_name) > 0`
+  ).catch(() => []);
+
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => String((row as { key_name?: string })?.key_name || '').trim())
+    .filter((name) => name.length > 0);
+};
+
+const loadMonitoringApiKeys = async (): Promise<string[]> => {
+  const [active, assigned] = await Promise.all([
+    loadApiKeysWithActiveStrategies(),
+    loadApiKeysAssignedToTenants(),
+  ]);
+  return Array.from(new Set([...active, ...assigned]));
+};
+
 const loadAllApiKeys = async (): Promise<string[]> => {
   const rows = await db.all(`SELECT name FROM api_keys`);
   return (Array.isArray(rows) ? rows : [])
@@ -145,7 +179,7 @@ export const runMonitoringCycleForApiKeys = async (
 };
 
 export const runMonitoringCycle = async (): Promise<{ processed: number; failed: number }> => {
-  const apiKeys = await loadApiKeysWithActiveStrategies();
+  const apiKeys = await loadMonitoringApiKeys();
   return runMonitoringCycleForApiKeys(apiKeys);
 };
 
