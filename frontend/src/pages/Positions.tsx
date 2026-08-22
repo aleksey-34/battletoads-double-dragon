@@ -208,6 +208,7 @@ const Positions: React.FC = () => {
   const [manualOrderDraftByKey, setManualOrderDraftByKey] = useState<{ [key: string]: ManualOrderDraft }>({});
   const apiKeysRef = useRef<ApiKey[]>([]);
   const activeExchangeTabRef = useRef('');
+  const fetchApiKeysSeq = useRef(0);
 
   useEffect(() => {
     void fetchApiKeys();
@@ -246,10 +247,17 @@ const Positions: React.FC = () => {
   };
 
   const fetchApiKeys = async () => {
+    const seq = ++fetchApiKeysSeq.current;
     setApiKeysLoading(true);
     setApiKeysError('');
+    // Ensure bearer is set even if Positions mounts before App finishes auth check.
+    const password = String(localStorage.getItem('password') || '').trim();
+    if (password) {
+      axios.defaults.headers.common.Authorization = `Bearer ${password}`;
+    }
     try {
-      const res = await axios.get('/api/api-keys');
+      const res = await axios.get('/api/api-keys', { timeout: 60_000 });
+      if (seq !== fetchApiKeysSeq.current) return;
       const keys: ApiKey[] = Array.isArray(res.data) ? res.data : [];
       setApiKeys(keys);
 
@@ -271,6 +279,11 @@ const Positions: React.FC = () => {
 
       setLoadedKeys(new Set());
     } catch (error: any) {
+      if (seq !== fetchApiKeysSeq.current) return;
+      // Aborted / superseded requests are not "backend down".
+      if (axios.isCancel?.(error) || error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') {
+        return;
+      }
       const status = Number(error?.response?.status || 0);
       const serverMessage = String(error?.response?.data?.error || '').trim();
       if (status === 403) {
@@ -280,12 +293,19 @@ const Positions: React.FC = () => {
       } else if (status > 0) {
         setApiKeysError(serverMessage || `Не удалось загрузить API-ключи (HTTP ${status}).`);
       } else {
-        setApiKeysError('Бэкенд недоступен. Проверьте API и повторите.');
+        const detail = String(error?.message || error?.code || '').trim();
+        setApiKeysError(
+          detail
+            ? `Бэкенд недоступен (${detail}). Проверьте API и повторите.`
+            : 'Бэкенд недоступен. Проверьте API и повторите.',
+        );
       }
       setApiKeys([]);
       console.error(error);
     } finally {
-      setApiKeysLoading(false);
+      if (seq === fetchApiKeysSeq.current) {
+        setApiKeysLoading(false);
+      }
     }
   };
 
