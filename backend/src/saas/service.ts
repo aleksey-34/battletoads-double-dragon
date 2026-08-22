@@ -20165,10 +20165,8 @@ export const removeAlgofundSystemFromProfile = async (payload: {
         }
 
         if (Number(remainingEnabled?.cnt || 0) === 0) {
-          // No systems left — fully demote runtime strategies (archive them so the
-          // dashboard "sets" counter goes to 0 and the connect-modal stops listing
-          // this tenant as connected to that TS). Positions on the exchange are NOT
-          // touched here — that decision is controlled by shouldClosePositions below.
+          // Full demat: archive runtime legs, then hard-delete inactive piles so
+          // demat leaves no ghost strategies / monitoring spam leftovers.
           const archived = await db.run(
             `UPDATE strategies
              SET is_active = 0,
@@ -20180,19 +20178,73 @@ export const removeAlgofundSystemFromProfile = async (payload: {
                AND is_runtime = 1`,
             [apiKeyName]
           ).catch(() => ({ changes: 0 }));
-          logger.info(`[removeAlgofundSystemFromProfile] No systems remain for ${apiKeyName}: archived ${(archived as any)?.changes || 0} runtime strategies`);
+          const deleted = await db.run(
+            `DELETE FROM strategies
+             WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ? LIMIT 1)
+               AND COALESCE(is_active, 0) = 0`,
+            [apiKeyName]
+          ).catch(() => ({ changes: 0 }));
+          logger.info(
+            `[removeAlgofundSystemFromProfile] No systems remain for ${apiKeyName}: `
+            + `archived ${(archived as any)?.changes || 0} runtime, `
+            + `deleted ${(deleted as any)?.changes || 0} inactive strategies`,
+          );
 
           // Clear published_system_name so this tenant disappears from the
           // connect-modal that lists tenants currently bound to the TS.
           try {
             await db.run(
               `UPDATE algofund_profiles
-               SET published_system_name = '', updated_at = CURRENT_TIMESTAMP
+               SET published_system_name = '',
+                   assigned_api_key_name = NULL,
+                   execution_api_key_name = NULL,
+                   updated_at = CURRENT_TIMESTAMP
                WHERE id = ?`,
               [profileId]
             );
           } catch (e) {
             logger.warn(`[removeAlgofundSystem] clear published_system_name for profile ${profileId}: ${(e as Error).message}`);
+          }
+
+          // Unassign key + stamp keysInvalid so monitoring stops polling auth-dead keys.
+          try {
+            const tenantRow = await db.get(
+              `SELECT t.id AS tenant_id, t.client_preferences_json AS prefs
+               FROM algofund_profiles ap
+               JOIN tenants t ON t.id = ap.tenant_id
+               WHERE ap.id = ?`,
+              [profileId],
+            ) as { tenant_id?: number; prefs?: string } | undefined;
+            const tenantId = Number(tenantRow?.tenant_id || 0);
+            if (tenantId > 0) {
+              let prefs: Record<string, unknown> = {};
+              try {
+                prefs = JSON.parse(String(tenantRow?.prefs || '{}') || '{}') as Record<string, unknown>;
+              } catch {
+                prefs = {};
+              }
+              prefs.keysInvalid = true;
+              prefs.keysInvalidAt = new Date().toISOString();
+              prefs.keysInvalidReason = 'dematerialized_full';
+              prefs.keysInvalidKey = apiKeyName;
+              await db.run(
+                `UPDATE tenants
+                 SET assigned_api_key_name = NULL,
+                     status = CASE WHEN status = 'deleted' THEN status ELSE 'keys_invalid' END,
+                     client_preferences_json = ?,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?`,
+                [JSON.stringify(prefs), tenantId],
+              );
+              await db.run(
+                `UPDATE strategy_client_profiles
+                 SET assigned_api_key_name = NULL, updated_at = CURRENT_TIMESTAMP
+                 WHERE tenant_id = ?`,
+                [tenantId],
+              ).catch(() => {});
+            }
+          } catch (e) {
+            logger.warn(`[removeAlgofundSystem] keysInvalid stamp failed: ${(e as Error).message}`);
           }
 
           // Mark card_deployments inactive so the card UI doesn't keep showing it as live

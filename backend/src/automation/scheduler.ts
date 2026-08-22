@@ -24,21 +24,26 @@ const loadApiKeysWithActiveStrategies = async (): Promise<string[]> => {
 
 /** Keys assigned to client cabinets (even with no active strategies yet). */
 const loadApiKeysAssignedToTenants = async (): Promise<string[]> => {
+  // Skip keysInvalid / keys_invalid cabinets — demat leftovers must not keep
+  // hammering exchange auth (Invalid ACCESS_KEY spam).
   const rows = await db.all(
     `SELECT DISTINCT key_name FROM (
        SELECT TRIM(COALESCE(NULLIF(ap.execution_api_key_name, ''), ap.assigned_api_key_name, '')) AS key_name
        FROM algofund_profiles ap
        JOIN tenants t ON t.id = ap.tenant_id
-       WHERE t.status != 'deleted'
+       WHERE t.status NOT IN ('deleted', 'keys_invalid')
+         AND COALESCE(json_extract(t.client_preferences_json, '$.keysInvalid'), 0) != 1
        UNION
        SELECT TRIM(COALESCE(sp.assigned_api_key_name, '')) AS key_name
        FROM strategy_client_profiles sp
        JOIN tenants t ON t.id = sp.tenant_id
-       WHERE t.status != 'deleted'
+       WHERE t.status NOT IN ('deleted', 'keys_invalid')
+         AND COALESCE(json_extract(t.client_preferences_json, '$.keysInvalid'), 0) != 1
        UNION
        SELECT TRIM(COALESCE(t.assigned_api_key_name, '')) AS key_name
        FROM tenants t
-       WHERE t.status != 'deleted'
+       WHERE t.status NOT IN ('deleted', 'keys_invalid')
+         AND COALESCE(json_extract(t.client_preferences_json, '$.keysInvalid'), 0) != 1
      ) q
      WHERE key_name IS NOT NULL AND length(key_name) > 0`
   ).catch(() => []);
