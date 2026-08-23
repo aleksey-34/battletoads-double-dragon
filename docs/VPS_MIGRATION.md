@@ -57,9 +57,11 @@ bash scripts/vps_db_retention.sh --apply
 PRE_RETENTION_CLEAN=1 bash scripts/vps_migration_export.sh
 ```
 
-**Autoklean:** `btdd-runtime` — weekly strip (`DB_RETENTION_AUTO=1`, default). VACUUM только в maintenance (`vps_db_retention.sh`).
+**Autoklean:** `btdd-runtime` — weekly strip (`DB_RETENTION_AUTO=1`, default). Optional orphan purge: `DB_RETENTION_PURGE_ORPHANS=1`. VACUUM только в maintenance (`vps_db_retention.sh --apply`).
 
 Env: `DB_RETENTION_DAYS=90`, `PINNED_BACKTEST_RUN_IDS=360`, `DB_RETENTION_INTERVAL_HOURS=168`.
+
+**Локальные устаревшие дампы (ноут):** после pull с prod можно удалить `backend/database.db.vps_full` (~22G Jul 2026) — заменить свежим `backups/migration/prod_*/db/database.db.gz`.
 
 ---
 

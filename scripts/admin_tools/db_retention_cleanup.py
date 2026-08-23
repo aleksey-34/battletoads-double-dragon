@@ -70,8 +70,10 @@ def parse_strategy_ids_json(raw: str | None) -> set[int]:
 
 
 def load_protected_strategy_ids(conn: sqlite3.Connection) -> set[int]:
+    """Strategies that must never be deleted and anchor portfolio/TS retention."""
     sql = """
     SELECT DISTINCT strategy_id FROM (
+      -- All master card members (active cards + historical card definitions)
       SELECT mcm.strategy_id
       FROM master_card_members mcm
       JOIN master_cards mc ON mc.id = mcm.card_id
@@ -84,6 +86,31 @@ def load_protected_strategy_ids(conn: sqlite3.Connection) -> set[int]:
       WHERE COALESCE(ts.is_active, 0) = 1
 
       UNION
+      -- Published / portfolio TS names (full sweep depth — even if TS paused)
+      SELECT tsm.strategy_id
+      FROM trading_system_members tsm
+      JOIN trading_systems ts ON ts.id = tsm.system_id
+      WHERE ts.name LIKE 'ALGOFUND_MASTER::%'
+         OR ts.name LIKE 'ALGOFUND::%'
+         OR ts.name LIKE 'CLOUD%'
+
+      UNION
+      SELECT tsm.strategy_id
+      FROM trading_system_members tsm
+      JOIN trading_systems ts ON ts.id = tsm.system_id
+      JOIN algofund_portfolio_members apm ON apm.system_name = ts.name
+      JOIN algofund_portfolios ap ON ap.id = apm.portfolio_id
+      WHERE COALESCE(ap.is_enabled, 0) = 1
+        AND COALESCE(apm.is_enabled, 0) = 1
+
+      UNION
+      SELECT tsm.strategy_id
+      FROM trading_system_members tsm
+      JOIN trading_systems ts ON ts.id = tsm.system_id
+      JOIN algofund_active_systems aas ON aas.system_name = ts.name
+      WHERE COALESCE(aas.is_enabled, 0) = 1
+
+      UNION
       SELECT tsm.strategy_id
       FROM card_deployments cd
       JOIN trading_systems ts ON ts.id = cd.materialized_system_id
@@ -91,11 +118,20 @@ def load_protected_strategy_ids(conn: sqlite3.Connection) -> set[int]:
       WHERE COALESCE(cd.status, '') != 'inactive'
 
       UNION
+      SELECT lte.strategy_id
+      FROM live_trade_events lte
+      WHERE lte.strategy_id IS NOT NULL
+
+      UNION
       SELECT s.id
       FROM strategies s
       WHERE COALESCE(s.is_runtime, 0) = 1
          OR COALESCE(s.is_active, 0) = 1
          OR COALESCE(s.is_archived, 0) = 1
+         OR COALESCE(s.origin, '') IN (
+           'card_materialized', 'saas_materialize', 'saas_materialize_dca',
+           'published', 'saas_archived', 'saas_overlay_legacy'
+         )
     )
     WHERE strategy_id IS NOT NULL
     """
@@ -188,7 +224,24 @@ def main() -> int:
         for rid in sorted(ids, reverse=True)[:3]:
             keep_full_json.add(rid)
 
-    # Active card member sets: keep best matching multi-strategy run per card (if any)
+    def keep_best_portfolio_run_for_member_set(member_sids: set[int], min_overlap_ratio: float = 0.25) -> None:
+        if len(member_sids) < 2:
+            return
+        best_rid = None
+        best_overlap = 0
+        for row in runs:
+            rid = int(row["id"])
+            sids = parse_strategy_ids_json(row["strategy_ids"])
+            if len(sids) < 2:
+                continue
+            overlap = len(sids & member_sids)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_rid = rid
+        if best_rid is not None and best_overlap >= max(2, int(len(member_sids) * min_overlap_ratio)):
+            keep_full_json.add(best_rid)
+
+    # Active card member sets: keep best matching multi-strategy run per card
     card_rows = conn.execute(
         """
         SELECT mc.id, GROUP_CONCAT(mcm.strategy_id) AS sids
@@ -203,21 +256,38 @@ def main() -> int:
             member_sids = {int(x) for x in str(card["sids"] or "").split(",") if x.strip()}
         except ValueError:
             continue
-        if len(member_sids) < 2:
+        keep_best_portfolio_run_for_member_set(member_sids)
+
+    # Enabled algofund portfolios: full sweep depth per pack
+    portfolio_rows = conn.execute(
+        """
+        SELECT ap.set_key, ts.id AS ts_id, GROUP_CONCAT(tsm.strategy_id) AS sids
+        FROM algofund_portfolios ap
+        JOIN algofund_portfolio_members apm ON apm.portfolio_id = ap.id
+        JOIN trading_systems ts ON ts.name = apm.system_name
+        JOIN trading_system_members tsm ON tsm.system_id = ts.id
+        WHERE COALESCE(ap.is_enabled, 0) = 1
+          AND COALESCE(apm.is_enabled, 0) = 1
+        GROUP BY ap.set_key, ts.id
+        """
+    ).fetchall()
+    portfolio_pack_sids: set[int] = set()
+    for prow in portfolio_rows:
+        try:
+            member_sids = {int(x) for x in str(prow["sids"] or "").split(",") if x.strip()}
+        except ValueError:
             continue
-        best_rid = None
-        best_overlap = 0
-        for row in runs:
-            rid = int(row["id"])
-            sids = parse_strategy_ids_json(row["strategy_ids"])
-            if len(sids) < 2:
-                continue
-            overlap = len(sids & member_sids)
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best_rid = rid
-        if best_rid is not None and best_overlap >= max(2, len(member_sids) // 4):
-            keep_full_json.add(best_rid)
+        portfolio_pack_sids.update(member_sids)
+        keep_best_portfolio_run_for_member_set(member_sids, min_overlap_ratio=0.2)
+    if len(portfolio_pack_sids) >= 2:
+        keep_best_portfolio_run_for_member_set(portfolio_pack_sids, min_overlap_ratio=0.15)
+
+    # Portfolio backtests that only touch protected strategies (published full sweeps)
+    for row in runs:
+        rid = int(row["id"])
+        sids = parse_strategy_ids_json(row["strategy_ids"])
+        if len(sids) >= 2 and sids.issubset(protected_sids):
+            keep_full_json.add(rid)
 
     # Recent runs per active api key (UI / btRtSweep headroom)
     active_keys = {

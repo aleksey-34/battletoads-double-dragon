@@ -45,7 +45,9 @@ du -h "$REMOTE_BACKEND/database.db" 2>/dev/null || true
 du -h "$REMOTE_BACKEND/monitoring.db" 2>/dev/null || true
 REMOTE
 
-log "Creating consistent SQLite backup on VPS and streaming gzip (may take 30-90 min for ~20GB)..."
+log "Tip: run retention on VPS first for a smaller bundle:"
+log "  ssh $SSH_HOST 'bash $REMOTE_APP/scripts/vps_db_retention.sh --apply'"
+log "Creating consistent SQLite backup on VPS and streaming gzip..."
 log "Log: $DEST/logs/db_pull.log"
 
 # Prefer deploy auto-backup on VPS (avoids duplicating 20GB in /tmp)

@@ -22,10 +22,12 @@ export const runDbRetentionCleanup = async (options?: {
   const vacuum = options?.vacuum === true && !dryRun;
 
   return new Promise((resolve) => {
+    const purgeOrphans = String(process.env.DB_RETENTION_PURGE_ORPHANS || '0').trim() === '1';
     const args = [
       scriptPath,
       dryRun ? '--dry-run' : '--apply',
       ...(vacuum ? ['--vacuum'] : []),
+      ...(purgeOrphans && !dryRun ? ['--purge-orphans'] : []),
     ];
     const child = spawn('python3', args, {
       env: {

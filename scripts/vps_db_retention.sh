@@ -13,6 +13,7 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_DIR="$APP_DIR/backups/db"
 DRY=1
 VACUUM=1
+PURGE_ORPHANS=0
 
 log() { printf '[vps-db-retention] %s\n' "$*"; }
 
@@ -21,6 +22,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY=1; VACUUM=0; shift ;;
     --apply) DRY=0; shift ;;
     --no-vacuum) VACUUM=0; shift ;;
+    --purge-orphans) PURGE_ORPHANS=1; shift ;;
     *) log "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -52,6 +54,7 @@ if [[ "$DRY" -eq 1 ]]; then
 else
   PY_ARGS+=(--apply)
   [[ "$VACUUM" -eq 1 ]] && PY_ARGS+=(--vacuum)
+  [[ "$PURGE_ORPHANS" -eq 1 ]] && PY_ARGS+=(--purge-orphans)
 fi
 
 if [[ "$DRY" -eq 1 ]]; then

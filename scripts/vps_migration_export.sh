@@ -26,9 +26,14 @@ copy_if_exists() {
 log "Packing from APP_DIR=$APP_DIR"
 
 if [[ "${PRE_RETENTION_CLEAN:-0}" == "1" ]]; then
-  log "PRE_RETENTION_CLEAN=1 — dry-run then apply (no vacuum, services stay up)"
+  log "PRE_RETENTION_CLEAN=1 — safe retention (dry-run → apply, optional vacuum)"
   python3 "$APP_DIR/scripts/admin_tools/db_retention_cleanup.py" --db "$BACKEND_DIR/database.db" --dry-run || true
-  python3 "$APP_DIR/scripts/admin_tools/db_retention_cleanup.py" --db "$BACKEND_DIR/database.db" --apply || true
+  if [[ "${PRE_RETENTION_VACUUM:-0}" == "1" ]]; then
+    bash "$APP_DIR/scripts/vps_db_retention.sh" --apply
+  else
+    python3 "$APP_DIR/scripts/admin_tools/db_retention_cleanup.py" \
+      --db "$BACKEND_DIR/database.db" --apply --purge-orphans || true
+  fi
 fi
 
 # Secrets & config (NEVER commit these to git)
