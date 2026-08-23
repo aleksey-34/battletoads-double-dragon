@@ -19429,12 +19429,12 @@ export const validateApiKeyNotAssigned = async (
     );
   }
 
-  // D2: Кросс-мод блокировка — ключ из algofund нельзя использовать в strategy и наоборот
+  // D2: Cross-mode on the same tenant (dual workspace) — one key cannot serve both flows.
   if (targetMode === 'algofund') {
     const crossConflict = await db.get(
       `SELECT scp.tenant_id, t.slug FROM strategy_client_profiles scp
        JOIN tenants t ON t.id = scp.tenant_id
-       WHERE scp.assigned_api_key_name = ? AND scp.tenant_id != ?`,
+       WHERE scp.assigned_api_key_name = ? AND scp.tenant_id = ?`,
       [apiKeyName, currentTenantId]
     );
     if (crossConflict) {
@@ -19446,7 +19446,7 @@ export const validateApiKeyNotAssigned = async (
     const crossConflict = await db.get(
       `SELECT ap.tenant_id, t.slug FROM algofund_profiles ap
        JOIN tenants t ON t.id = ap.tenant_id
-       WHERE ap.assigned_api_key_name = ? AND ap.tenant_id != ?`,
+       WHERE ap.assigned_api_key_name = ? AND ap.tenant_id = ?`,
       [apiKeyName, currentTenantId]
     );
     if (crossConflict) {

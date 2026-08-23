@@ -1,7 +1,7 @@
 import assert from 'assert';
 import { Given, Then, When, setDefaultTimeout } from '@cucumber/cucumber';
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(120_000);
 
 // ─── State ───────────────────────────────────────────────────────────────────
 

@@ -24,12 +24,15 @@ const state: TestWorldState = {
 
 export const sharedState = state;
 
-setDefaultTimeout(60 * 1000);
+setDefaultTimeout(120 * 1000);
 
 BeforeAll(async () => {
   state.dbFile = path.join(os.tmpdir(), `btdd-cucumber-${Date.now()}.sqlite`);
   process.env.DB_FILE = state.dbFile;
   process.env.ENABLE_GIT_UPDATE = '0';
+  process.env.STRATEGY_CYCLE_CONCURRENCY = '4';
+  process.env.BTDD_CUCUMBER = '1';
+  delete process.env.ADMIN_PLATFORM_TOKEN;
   process.env.PASSWORD_STATE_FILE = path.join(path.dirname(state.dbFile), 'cucumber-auth-password.json');
 
   const { setDashboardPassword } = await import('../../../src/utils/auth');

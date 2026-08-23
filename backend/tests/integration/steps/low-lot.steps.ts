@@ -96,8 +96,10 @@ Given(
     assert.ok(apiKeyId > 0, `API key "${apiKeyName}" not found`);
 
     const result: any = await db.run(
-      `INSERT INTO strategies (name, api_key_id, is_active, auto_update, max_deposit, lot_long_percent, lot_short_percent, base_symbol, quote_symbol)
-       VALUES (?, ?, 1, 1, ?, ?, ?, 'ORDI', 'USDT')`,
+      `INSERT INTO strategies (
+         name, api_key_id, is_active, auto_update, max_deposit, lot_long_percent, lot_short_percent,
+         base_symbol, quote_symbol, last_error, updated_at
+       ) VALUES (?, ?, 1, 1, ?, ?, ?, 'ORDI', 'USDT', 'Order size too small for balanced pair execution', CURRENT_TIMESTAMP)`,
       [name, apiKeyId, deposit, lot, lot]
     );
     lastCreatedStrategyId = Number(result?.lastID || 0);

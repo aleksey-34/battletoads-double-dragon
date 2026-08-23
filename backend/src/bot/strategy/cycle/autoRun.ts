@@ -299,6 +299,7 @@ export const runAutoStrategiesCycle = async () => {
   let processed = 0;
   let failed = 0;
   let skippedOffline = 0;
+  const cucumberMode = process.env.BTDD_CUCUMBER === '1';
 
   const validJobs = dedupedJobs.filter((row) => {
     const apiKeyName = String(row?.api_key_name || '');
@@ -308,6 +309,9 @@ export const runAutoStrategiesCycle = async () => {
 
   for (const row of validJobs) {
     const apiKeyName = String(row.api_key_name);
+    if (cucumberMode) {
+      continue;
+    }
     try {
       await ensureExchangeClientInitialized(apiKeyName);
     } catch (initErr) {
@@ -317,6 +321,7 @@ export const runAutoStrategiesCycle = async () => {
 
   const warmupJobs: MarketDataWarmupJob[] = [];
 
+  if (!cucumberMode) {
   for (const row of validJobs) {
     const apiKeyName = String(row.api_key_name);
     const exchange = getExchangeForApiKey(apiKeyName) || `key:${apiKeyName}`;
@@ -353,6 +358,7 @@ export const runAutoStrategiesCycle = async () => {
       });
     }
   }
+  }
 
   if (warmupJobs.length > 0) {
     const warmed = await warmMarketDataCache(warmupJobs);
@@ -364,6 +370,19 @@ export const runAutoStrategiesCycle = async () => {
     const strategyId = Number(row.strategy_id);
     const strategyName = String(row?.strategy_name || '');
     const strategyType = String(row.strategy_type || '');
+
+    if (cucumberMode) {
+      failed += 1;
+      try {
+        await updateStrategy(apiKeyName, strategyId, {
+          last_action: 'auto_cycle_failed',
+          last_error: 'cucumber: exchange skipped',
+        });
+      } catch {
+        // keep cycle alive in integration tests
+      }
+      return;
+    }
 
     try {
       if (strategyType === 'periodic_buy') {

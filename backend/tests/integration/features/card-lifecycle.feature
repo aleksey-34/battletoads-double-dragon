@@ -12,7 +12,7 @@ Feature: Trading card lifecycle
     When I send a GET request to "/api/saas/admin/offer-store"
     Then the response status should be 200
     And the response JSON should include key "offers"
-    And the response JSON should include key "publishedIds"
+    And the response JSON should include key "publishedOfferIds"
 
   Scenario: Admin publishes an offer to the storefront
     Given an offer exists in the catalog with any offerId
@@ -55,7 +55,7 @@ Feature: Trading card lifecycle
     And the tenants list includes a tenant with a strategy_client product mode
 
   Scenario: All tenants are listed correctly after creation
-    When I send a GET request to "/api/saas/admin/tenants"
+    When I send a GET request to "/api/saas/admin/summary?scope=light"
     Then the response status should be 200
     And the response JSON should include key "tenants"
 
@@ -63,19 +63,20 @@ Feature: Trading card lifecycle
 
   Scenario: Algofund start request can be submitted for an active tenant
     Given an algofund_client tenant exists
-    When I POST to "/api/saas/tenants/:tenantId/algofund/request" with action "start"
+    When I POST to "/api/saas/algofund/:tenantId/request" with action "start"
     Then the response status should be 200
 
   Scenario: Algofund request list is accessible for admin
-    When I send a GET request to "/api/saas/admin/algofund-requests"
+    When I send a GET request to "/api/saas/admin/summary?scope=light"
     Then the response status should be 200
-    And the response JSON should include key "requests"
+    And the response JSON should include key "algofundRequestQueue"
 
   # ─── PHASE 4: Monitoring – published trading systems ─────────────────────────
 
   Scenario: Admin trading systems list is accessible
-    When I send a GET request to "/api/saas/admin/trading-systems"
+    When I send a GET request to "/api/saas/admin/summary?scope=full"
     Then the response status should be 200
+    And the response JSON should include key "catalog"
 
   Scenario: Admin can fetch the backtest snapshot for a published TS
     When I send a GET request to "/api/saas/admin/offer-store"
@@ -117,7 +118,7 @@ Feature: Trading card lifecycle
   # ─── PHASE 6: BTDD_D1 as algofund_client card ────────────────────────────────
 
   Scenario: BTDD_D1 API key exists in the system
-    When I send a GET request to "/api/saas/admin/api-keys"
+    When I send a GET request to "/api/api-keys"
     Then the response status should be 200
 
   Scenario: Admin report settings are readable
@@ -135,9 +136,11 @@ Feature: Trading card lifecycle
   # ─── PHASE 8: Sweep summary available ────────────────────────────────────────
 
   Scenario: Sweep summary endpoint responds
-    When I send a GET request to "/api/saas/admin/sweep-summary"
+    When I send a GET request to "/api/saas/admin/summary"
     Then the response status should be 200
+    And the response JSON should include key "sweepSummary"
 
   Scenario: Catalog summary endpoint responds
-    When I send a GET request to "/api/saas/admin/catalog"
+    When I send a GET request to "/api/saas/admin/summary"
     Then the response status should be 200
+    And the response JSON should include key "catalog"
