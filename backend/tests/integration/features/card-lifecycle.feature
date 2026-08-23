@@ -40,7 +40,16 @@ Feature: Trading card lifecycle
   Scenario: Admin creates an algofund_client tenant
     When I POST to "/api/saas/admin/tenants" with body:
       """
-      { "displayName": "Test Algofund Client", "productMode": "algofund_client", "planCode": "algofund_20" }
+      {
+        "displayName": "Test Algofund Client",
+        "productMode": "algofund_client",
+        "planCode": "algofund_20",
+        "inlineApiKeyName": "test-algofund-client-key",
+        "inlineApiKey": "test_key_af_client",
+        "inlineApiSecret": "test_secret_af_client",
+        "inlineApiExchange": "bybit",
+        "inlineApiTestnet": true
+      }
       """
     Then the response status should be 200
     And the response JSON should include key "tenants"

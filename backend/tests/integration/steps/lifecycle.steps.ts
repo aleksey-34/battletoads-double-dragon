@@ -7,6 +7,7 @@ const state: any = apiSteps.sharedState;
 
 let publishedOfferId: string | null = null;
 let createdTenantId: number | null = null;
+let createdAlgofundApiKeyName: string | null = null;
 
 setDefaultTimeout(60_000);
 
@@ -54,25 +55,44 @@ Given('an offer is published but has no active client tenants', async () => {
   publishedOfferId = publishedIds[0] || null;
 });
 
+const resolveAlgofundTenantByApiKey = async (apiKeyName: string): Promise<{ tenantId: number; apiKeyName: string }> => {
+  const { db } = await import('../../../src/utils/database');
+  const row = await db.get(
+    `SELECT ap.tenant_id,
+            COALESCE(NULLIF(ap.assigned_api_key_name, ''), NULLIF(ap.execution_api_key_name, ''), NULLIF(t.assigned_api_key_name, '')) AS api_key_name
+     FROM algofund_profiles ap
+     JOIN tenants t ON t.id = ap.tenant_id
+     WHERE ap.assigned_api_key_name = ?
+        OR ap.execution_api_key_name = ?
+        OR t.assigned_api_key_name = ?
+     ORDER BY ap.tenant_id DESC
+     LIMIT 1`,
+    [apiKeyName, apiKeyName, apiKeyName],
+  ) as { tenant_id?: number; api_key_name?: string } | undefined;
+  const tenantId = Number(row?.tenant_id || 0);
+  const resolvedKey = String(row?.api_key_name || apiKeyName).trim();
+  assert.ok(tenantId > 0 && resolvedKey, `Expected algofund tenant with API key ${apiKeyName}`);
+  return { tenantId, apiKeyName: resolvedKey };
+};
+
 Given('an algofund_client tenant exists', async () => {
+  const suffix = Date.now();
+  const inlineApiKeyName = `lifecycle-af-${suffix}`;
   const res = await authPost('/api/saas/admin/tenants')
     .send({
-      displayName: `Lifecycle Algofund ${Date.now()}`,
+      displayName: `Lifecycle Algofund ${suffix}`,
       productMode: 'algofund_client',
       planCode: 'algofund_20',
-      inlineApiKeyName: `lifecycle-af-${Date.now()}`,
+      inlineApiKeyName,
       inlineApiKey: 'test_key_af',
       inlineApiSecret: 'test_secret_af',
       inlineApiExchange: 'bybit',
       inlineApiTestnet: true,
     });
   assert.strictEqual(res.status, 200, res.text || 'create algofund tenant failed');
-  const body = safeBody(res);
-  const tenants = Array.isArray(body.tenants) ? body.tenants as Array<Record<string, unknown>> : [];
-  const last = tenants[tenants.length - 1];
-  const tenantRow = (last?.tenant as { id?: number } | undefined) || (last as { id?: number });
-  createdTenantId = Number(tenantRow?.id ?? 0) || null;
-  assert.ok(createdTenantId, 'Expected createdTenantId after algofund tenant create');
+  const resolved = await resolveAlgofundTenantByApiKey(inlineApiKeyName);
+  createdTenantId = resolved.tenantId;
+  createdAlgofundApiKeyName = resolved.apiKeyName;
 });
 
 Given('an algofund_client tenant is connected to a published offer', async () => {
@@ -141,13 +161,29 @@ When('I POST to {string} with body:', async (routePath: string, rawBody: string)
     const tenantRow = (last?.tenant as { id?: number } | undefined) || (last as { id?: number });
     createdTenantId = Number(tenantRow?.id ?? 0) || null;
   }
+
+  const inlineApiKeyName = String(body.inlineApiKeyName || '').trim();
+  if (
+    routePath === '/api/saas/admin/tenants'
+    && String(body.productMode || '') === 'algofund_client'
+    && inlineApiKeyName
+    && state.response?.status === 200
+  ) {
+    const resolved = await resolveAlgofundTenantByApiKey(inlineApiKeyName);
+    createdTenantId = resolved.tenantId;
+    createdAlgofundApiKeyName = resolved.apiKeyName;
+  }
 });
 
 When('I POST to {string} with action {string}', async (routeTemplate: string, action: string) => {
   const tenantId = createdTenantId;
   assert.ok(tenantId, 'Expected a tenantId from a previous step');
   const routePath = routeTemplate.replace(':tenantId', String(tenantId));
-  state.response = await http().post(routePath).send({ requestType: action });
+  const payload: Record<string, unknown> = { requestType: action };
+  if (createdAlgofundApiKeyName) {
+    payload.executionApiKeyName = createdAlgofundApiKeyName;
+  }
+  state.response = await http().post(routePath).send(payload);
 });
 
 When('I PATCH {string} with body:', async (routePath: string, rawBody: string) => {
