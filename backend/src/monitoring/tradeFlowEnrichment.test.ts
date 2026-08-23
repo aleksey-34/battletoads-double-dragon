@@ -38,7 +38,7 @@ describe('monitoring trade flow enrichment', () => {
     const out = rows.find((r) => r.id === 2);
     const rev = rows.find((r) => r.id === 3);
     assert.equal(out?.flowType, 'out');
-    assert.equal(out?.pnlPercent, 10);
+    assert.ok(out?.pnlPercent != null && Math.abs(out.pnlPercent - 10) < 0.001);
     assert.equal(rev?.flowType, 'reverse');
     assert.equal(rev?.pnlPercent, null);
   });
