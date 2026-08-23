@@ -312,3 +312,57 @@ export const deleteMonitoringDataForApiKey = async (apiKeyId: number): Promise<v
   await mdb.run(`DELETE FROM monitoring_snapshots WHERE api_key_id = ?`, [apiKeyId]);
   await mdb.run(`DELETE FROM exchange_fill_events WHERE api_key_id = ?`, [apiKeyId]);
 };
+
+/** Delete monitoring rows older than N days (snapshots by recorded_at, fills by actual_time ms). */
+export const purgeMonitoringDataOlderThanDays = async (
+  days: number,
+): Promise<{ snapshots: number; fills: number }> => {
+  await initMonitoringDb();
+  const mdb = getMonitoringDb();
+  const safeDays = Math.max(1, Math.floor(days));
+  const cutoffMs = Date.now() - safeDays * 86400000;
+
+  const snapResult = await mdb.run(
+    `DELETE FROM monitoring_snapshots
+     WHERE datetime(recorded_at) < datetime('now', ?)`,
+    [`-${safeDays} days`],
+  );
+  const fillResult = await mdb.run(
+    `DELETE FROM exchange_fill_events WHERE actual_time < ?`,
+    [cutoffMs],
+  );
+
+  return {
+    snapshots: Number((snapResult as { changes?: number })?.changes || 0),
+    fills: Number((fillResult as { changes?: number })?.changes || 0),
+  };
+};
+
+const RETENTION_PURGE_META_KEY = 'retention_purge_30d_20260823';
+
+/** One-time (meta-guarded) purge of pre-stabilization monitoring history. */
+export const ensureMonitoringRetentionPurge = async (): Promise<void> => {
+  await initMonitoringDb();
+  const mdb = getMonitoringDb();
+  const row = await mdb.get(
+    `SELECT value FROM monitoring_meta WHERE key = ?`,
+    [RETENTION_PURGE_META_KEY],
+  ) as { value?: string } | undefined;
+  if (row?.value) {
+    return;
+  }
+
+  const retentionDays = Math.max(
+    1,
+    Math.floor(Number(process.env.MONITORING_RETENTION_DAYS || 30)),
+  );
+  const result = await purgeMonitoringDataOlderThanDays(retentionDays);
+  await mdb.run(`VACUUM`);
+  await mdb.run(
+    `INSERT OR REPLACE INTO monitoring_meta (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)`,
+    [RETENTION_PURGE_META_KEY, JSON.stringify({ retentionDays, ...result, at: new Date().toISOString() })],
+  );
+  logger.info(
+    `[monitoring] Retention purge (>${retentionDays}d): snapshots=${result.snapshots} fills=${result.fills}`,
+  );
+};

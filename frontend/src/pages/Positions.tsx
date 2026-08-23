@@ -29,6 +29,7 @@ import MonitoringChartPanel, {
   MonitoringTradeFrequencyPoint,
   ChartPeriodDays,
 } from '../components/MonitoringChartPanel';
+import OpenPositionChartsPanel from '../components/OpenPositionChartsPanel';
 import { buildPublicPortfolioUrl, sharePublicPortfolioLink } from '../utils/portfolioLinks';
 import {
   groupMonitoringByAccount,
@@ -192,6 +193,7 @@ const Positions: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('positions');
   const [monitorModalOpen, setMonitorModalOpen] = useState(false);
   const [monChartOpen, setMonChartOpen] = useState(false);
+  const [monChartFullscreen, setMonChartFullscreen] = useState(false);
   const [monChartKey, setMonChartKey] = useState('');
   const [monChartDays, setMonChartDays] = useState<ChartPeriodDays>(7);
   const [monChartLoading, setMonChartLoading] = useState(false);
@@ -1625,9 +1627,19 @@ const Positions: React.FC = () => {
       )}
 
       <Modal
-        title={`Мониторинг: ${monChartKey || '—'}`}
+        title={(
+          <Space wrap>
+            <span>{`Мониторинг: ${monChartKey || '—'}`}</span>
+            <Button size="small" onClick={() => setMonChartFullscreen((v) => !v)}>
+              {monChartFullscreen ? 'Обычный размер' : 'На весь экран'}
+            </Button>
+          </Space>
+        )}
         open={monChartOpen}
-        onCancel={() => setMonChartOpen(false)}
+        onCancel={() => {
+          setMonChartOpen(false);
+          setMonChartFullscreen(false);
+        }}
         footer={monChartTenantSlug ? (
           <Space wrap>
             <Button onClick={() => void handleCopyPortfolioLink(monChartTenantSlug)}>
@@ -1641,7 +1653,13 @@ const Positions: React.FC = () => {
             </Button>
           </Space>
         ) : null}
-        width={960}
+        width={monChartFullscreen ? '100vw' : 960}
+        style={monChartFullscreen ? { top: 0, maxWidth: '100vw', paddingBottom: 0 } : undefined}
+        styles={{
+          body: monChartFullscreen
+            ? { maxHeight: 'calc(100vh - 120px)', overflow: 'auto' }
+            : undefined,
+        }}
       >
         <MonitoringChartPanel
           snapshots={monChartRaw}
@@ -1658,6 +1676,11 @@ const Positions: React.FC = () => {
           onBackfillFromExchange={handleBackfillFromExchange}
           backfillLoading={monChartBackfillLoading}
           backfillSupported={monChartBackfillSupported}
+        />
+        <OpenPositionChartsPanel
+          apiKeyName={monChartKey}
+          active={monChartOpen}
+          compact={!monChartFullscreen}
         />
       </Modal>
     </div>

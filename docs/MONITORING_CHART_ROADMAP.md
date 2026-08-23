@@ -11,6 +11,8 @@
 - **Хранение:** `backend/monitoring.db` (отдельно от `database.db`) — snapshots + fills.
   Строки ссылаются на `api_keys.id` из main (и дублируют `api_key_name` для удобства).
 - On-demand backfill Bybit: кнопка «С биржи» (Transaction Log + Execution List).
+- **Open-position charts** (Positions monitoring modal): synthetic/mono candles, Donchian, Entry/TP, fill arrows — lazy load.
+- **Retention:** one-time purge snapshots/fills older than 30d on boot (`ensureMonitoringRetentionPurge`); full demat deletes key monitoring rows.
 
 ## Позже
 

@@ -20247,6 +20247,20 @@ export const removeAlgofundSystemFromProfile = async (payload: {
             logger.warn(`[removeAlgofundSystem] keysInvalid stamp failed: ${(e as Error).message}`);
           }
 
+          try {
+            const keyRow = await db.get(
+              `SELECT id FROM api_keys WHERE name = ? LIMIT 1`,
+              [apiKeyName],
+            ) as { id?: number } | undefined;
+            if (keyRow?.id) {
+              const { deleteMonitoringDataForApiKey } = await import('../monitoring/db');
+              await deleteMonitoringDataForApiKey(Number(keyRow.id));
+              logger.info(`[removeAlgofundSystemFromProfile] purged monitoring DB for dematerialized key ${apiKeyName}`);
+            }
+          } catch (e) {
+            logger.warn(`[removeAlgofundSystemFromProfile] monitoring purge for ${apiKeyName}: ${(e as Error).message}`);
+          }
+
           // Mark card_deployments inactive so the card UI doesn't keep showing it as live
           try {
             await db.run(

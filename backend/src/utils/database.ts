@@ -918,6 +918,7 @@ export const initDB = async () => {
     initMonitoringDb,
     migrateMonitoringFromMainDb,
     attachMonitoringToMainDb,
+    ensureMonitoringRetentionPurge,
   } = await import('../monitoring/db');
   await initMonitoringDb();
   const migrated = await migrateMonitoringFromMainDb(db);
@@ -927,6 +928,7 @@ export const initDB = async () => {
       `Monitoring DB migrate: snapshots=${migrated.snapshots} fills=${migrated.fills}`,
     );
   }
+  await ensureMonitoringRetentionPurge();
   await attachMonitoringToMainDb(db);
 };
 
