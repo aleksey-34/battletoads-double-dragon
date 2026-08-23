@@ -26,6 +26,7 @@ log "Pulling .env and auth..."
 scp -q "$SSH_HOST:$REMOTE_APP/.env" "$DEST/config/.env" 2>/dev/null || log "WARN: .env missing"
 scp -q "$SSH_HOST:$REMOTE_BACKEND/.auth-password.json" "$DEST/config/.auth-password.json" 2>/dev/null || true
 scp -q "$SSH_HOST:$REMOTE_BACKEND/research.db" "$DEST/db/research.db" 2>/dev/null || true
+scp -q "$SSH_HOST:$REMOTE_BACKEND/monitoring.db" "$DEST/db/monitoring.db" 2>/dev/null || true
 
 log "Pulling nginx site config..."
 scp -q "$SSH_HOST:/etc/nginx/sites-available/battletoads-double-dragon" "$DEST/nginx/battletoads-double-dragon" 2>/dev/null || true
@@ -41,6 +42,7 @@ node --version 2>/dev/null || true
 nginx -v 2>&1 || true
 systemctl is-active btdd-api btdd-runtime btdd-research nginx 2>/dev/null || true
 du -h "$REMOTE_BACKEND/database.db" 2>/dev/null || true
+du -h "$REMOTE_BACKEND/monitoring.db" 2>/dev/null || true
 REMOTE
 
 log "Creating consistent SQLite backup on VPS and streaming gzip (may take 30-90 min for ~20GB)..."
@@ -95,6 +97,7 @@ Files:
   config/.env              — production secrets (DO NOT commit)
   config/.auth-password.json
   db/database.db.gz        — consistent sqlite backup of prod database.db
+  db/monitoring.db         — equity snapshots + fills (~MB scale)
   db/research.db
   nginx/                   — site config reference
 EOF

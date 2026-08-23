@@ -27,6 +27,7 @@ import { loadSettings } from './config/settings';
 import { initExchangeClient } from './bot/exchange';
 import { runAutoStrategiesCycle } from './bot/strategy';
 import { runLiquidityScanCycle, runMonitoringCycle, runReconciliationCycle } from './automation/scheduler';
+import { startDbRetentionScheduler } from './maintenance/dbRetention';
 import { startAdminTelegramReporter } from './notifications/adminTelegramReporter';
 import { runTvAlertsMonitorCycle } from './tvAlerts/engine';
 import { startWeexDelistWatchdog } from './bot/weexDelistWatchdog';
@@ -195,6 +196,8 @@ const startRuntime = async () => {
   } else {
     logger.warn('[runtime] Liquidity scan cycle is disabled by runtime flag');
   }
+
+  startDbRetentionScheduler();
 
   const tvAlertsMonitorSec = Math.max(5, Math.floor(Number(process.env.TV_ALERTS_MONITOR_SEC || 15) || 15));
   let tvAlertsMonitorRunning = false;

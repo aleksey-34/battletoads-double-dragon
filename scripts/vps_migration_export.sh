@@ -25,6 +25,12 @@ copy_if_exists() {
 
 log "Packing from APP_DIR=$APP_DIR"
 
+if [[ "${PRE_RETENTION_CLEAN:-0}" == "1" ]]; then
+  log "PRE_RETENTION_CLEAN=1 — dry-run then apply (no vacuum, services stay up)"
+  python3 "$APP_DIR/scripts/admin_tools/db_retention_cleanup.py" --db "$BACKEND_DIR/database.db" --dry-run || true
+  python3 "$APP_DIR/scripts/admin_tools/db_retention_cleanup.py" --db "$BACKEND_DIR/database.db" --apply || true
+fi
+
 # Secrets & config (NEVER commit these to git)
 copy_if_exists "$APP_DIR/.env" "$WORK/config/.env"
 copy_if_exists "$BACKEND_DIR/.auth-password.json" "$WORK/config/.auth-password.json"
@@ -33,6 +39,7 @@ copy_if_exists "$BACKEND_DIR/.env" "$WORK/config/backend.env"
 # Databases
 copy_if_exists "$BACKEND_DIR/database.db" "$WORK/db/database.db"
 copy_if_exists "${DB_FILE:-$BACKEND_DIR/database.db}" "$WORK/db/database.db"
+copy_if_exists "$BACKEND_DIR/monitoring.db" "$WORK/db/monitoring.db"
 copy_if_exists "$BACKEND_DIR/research.db" "$WORK/db/research.db"
 copy_if_exists "$APP_DIR/data/research.db" "$WORK/db/research.db"
 copy_if_exists "$APP_DIR/research.db" "$WORK/db/research.db"

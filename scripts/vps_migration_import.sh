@@ -44,6 +44,7 @@ restore_file "$WORK/config/.env" "$APP_DIR/.env"
 restore_file "$WORK/config/backend.env" "$BACKEND_DIR/.env"
 restore_file "$WORK/config/.auth-password.json" "$BACKEND_DIR/.auth-password.json"
 restore_file "$WORK/db/database.db" "$BACKEND_DIR/database.db"
+restore_file "$WORK/db/monitoring.db" "$BACKEND_DIR/monitoring.db"
 restore_file "$WORK/db/research.db" "$BACKEND_DIR/research.db"
 
 mkdir -p "$APP_DIR/data" "$APP_DIR/backups/db"
@@ -52,7 +53,7 @@ if [[ -f "$WORK/db/research.db" ]]; then
   chown "$SERVICE_USER:$SERVICE_USER" "$APP_DIR/data/research.db"
 fi
 
-chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR/.env" "$BACKEND_DIR/database.db" "$BACKEND_DIR/.auth-password.json" 2>/dev/null || true
+chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR/.env" "$BACKEND_DIR/database.db" "$BACKEND_DIR/monitoring.db" "$BACKEND_DIR/.auth-password.json" 2>/dev/null || true
 chmod 600 "$APP_DIR/.env" "$BACKEND_DIR/.auth-password.json" 2>/dev/null || true
 
 if [[ -f "$WORK/nginx/battletoads-double-dragon" ]]; then

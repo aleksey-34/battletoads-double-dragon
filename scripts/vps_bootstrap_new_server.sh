@@ -65,6 +65,11 @@ if [[ -n "$BUNDLE" ]]; then
     chown ubuntu:ubuntu "$APP_DIR/backend/research.db"
   fi
 
+  if [[ -f "$BUNDLE/db/monitoring.db" ]]; then
+    cp -a "$BUNDLE/db/monitoring.db" "$APP_DIR/backend/monitoring.db"
+    chown ubuntu:ubuntu "$APP_DIR/backend/monitoring.db"
+  fi
+
   log "Restoring database.db from gzip (may take a while)..."
   gunzip -c "$BUNDLE/db/database.db.gz" > "$APP_DIR/backend/database.db"
   chown ubuntu:ubuntu "$APP_DIR/backend/database.db"
