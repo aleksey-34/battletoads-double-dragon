@@ -6,6 +6,7 @@ import {
   getPartnerMonitoringSeries,
   getPartnerRefreshStatus,
   getPartnerTradesSummary,
+  isPartnerScopedApiKey,
   startPartnerLiveRefresh,
 } from '../saas/partnerService';
 import { backfillMonitoringEquityFromExchange } from '../bot/monitoring';
@@ -200,11 +201,12 @@ router.get('/partner/monitoring/:apiKeyName', requirePartnerOrAdmin, async (req,
       || String(req.query.includeTradesRows || '').toLowerCase() === 'true';
     const all = String(req.query.all || '0') === '1'
       || String(req.query.all || '').toLowerCase() === 'true';
-    res.json(await getPartnerMonitoringSeries(apiKeyName, { days, limit, all, includeTradesRows }));
+    const skipScopeCheck = Boolean(req.adminAuth);
+    res.json(await getPartnerMonitoringSeries(apiKeyName, { days, limit, all, includeTradesRows, skipScopeCheck }));
   } catch (error) {
-    const err = error as Error;
+    const err = error as Error & { statusCode?: number };
     logger.error(`Partner monitoring error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode === 403 ? 403 : 500).json({ error: err.message });
   }
 });
 
@@ -213,6 +215,9 @@ router.post('/partner/monitoring/:apiKeyName/backfill-equity', requirePartnerOrA
     const apiKeyName = String(req.params.apiKeyName || '').trim();
     if (!apiKeyName) {
       return res.status(400).json({ error: 'apiKeyName required' });
+    }
+    if (!req.adminAuth && !(await isPartnerScopedApiKey(apiKeyName))) {
+      return res.status(403).json({ error: 'Forbidden: apiKeyName is outside partner scope' });
     }
     const maxDaysRaw = Number.parseInt(String(req.body?.maxDays ?? '90'), 10);
     const maxDays = Number.isFinite(maxDaysRaw) ? Math.min(180, Math.max(1, maxDaysRaw)) : 90;

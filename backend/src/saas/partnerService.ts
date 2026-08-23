@@ -382,15 +382,38 @@ export const getPartnerDashboard = async (options?: { refresh?: boolean }) => {
   };
 };
 
+export const isPartnerScopedApiKey = async (apiKeyName: string): Promise<boolean> => {
+  const key = asString(apiKeyName);
+  if (!key) return false;
+  const clients = await loadPartnerClientRows();
+  return clients.some((row) => row.apiKeyName === key);
+};
+
 export const getPartnerMonitoringSeries = async (
   apiKeyName: string,
-  options?: { days?: number; limit?: number; all?: boolean; includeTradesRows?: boolean },
+  options?: {
+    days?: number;
+    limit?: number;
+    all?: boolean;
+    includeTradesRows?: boolean;
+    /** Platform admin may read any key; partner token must stay scoped. */
+    skipScopeCheck?: boolean;
+  },
 ) => {
+  const key = asString(apiKeyName);
+  if (!key) {
+    throw new Error('apiKeyName required');
+  }
+  if (!options?.skipScopeCheck && !(await isPartnerScopedApiKey(key))) {
+    const err = new Error('Forbidden: apiKeyName is outside partner scope');
+    (err as Error & { statusCode?: number }).statusCode = 403;
+    throw err;
+  }
   const days = asNumber(options?.days, 0);
   const limit = asNumber(options?.limit, 288);
   const allPeriod = options?.all === true;
   const includeTradesRows = options?.includeTradesRows === true;
-  return getMonitoringBundle(apiKeyName, {
+  return getMonitoringBundle(key, {
     days,
     limit,
     all: allPeriod,
