@@ -463,6 +463,7 @@ export type MonitoringTradeRow = {
   fee: number | null;
   time: string;
   strategyId: number | null;
+  entryPrice: number | null;
 };
 
 export const getMonitoringTrades = async (
@@ -493,6 +494,7 @@ export const getMonitoringTrades = async (
          lte.actual_fee,
          lte.actual_time,
          lte.strategy_id,
+         lte.entry_price,
          s.base_symbol,
          s.quote_symbol
        FROM live_trade_events lte
@@ -510,6 +512,7 @@ export const getMonitoringTrades = async (
          efe.actual_fee,
          efe.actual_time,
          NULL AS strategy_id,
+         NULL AS entry_price,
          efe.source_symbol AS base_symbol,
          NULL AS quote_symbol
        FROM mon.exchange_fill_events efe
@@ -529,6 +532,7 @@ export const getMonitoringTrades = async (
     actual_fee?: number;
     actual_time?: number;
     strategy_id?: number;
+    entry_price?: number;
     base_symbol?: string;
     quote_symbol?: string;
   }>;
@@ -560,6 +564,9 @@ export const getMonitoringTrades = async (
         fee: row.actual_fee != null ? toFiniteNumber(row.actual_fee, 0) : null,
         time: new Date(timeMs).toISOString(),
         strategyId: row.strategy_id != null ? toFiniteNumber(row.strategy_id, 0) : null,
+        entryPrice: row.entry_price != null && toFiniteNumber(row.entry_price, 0) > 0
+          ? toFiniteNumber(row.entry_price, 0)
+          : null,
       };
     })
     .filter((row): row is MonitoringTradeRow => row !== null);

@@ -4669,6 +4669,91 @@ const saasArchiveStrategy = async (
   }
 };
 
+const isStrategyStateOpen = (stateRaw: string | null | undefined): boolean => {
+  const state = asString(stateRaw, 'flat').trim().toLowerCase() || 'flat';
+  return state === 'long' || state === 'short';
+};
+
+/** Portfolio remat: never close exchange exposure; skip archive if leg still open. */
+const saasArchiveStrategyForRemat = async (
+  apiKeyName: string,
+  row: {
+    id: number;
+    base_symbol?: string | null;
+    quote_symbol?: string | null;
+    market_mode?: string | null;
+    name?: string | null;
+    state?: string | null;
+  },
+  options?: { preserveOpenExposure?: boolean; skipCancel?: boolean; tenantId?: number },
+): Promise<{ archived: boolean; skipped?: string }> => {
+  const preserveOpenExposure = options?.preserveOpenExposure !== false;
+  const state = asString(row.state, 'flat').trim().toLowerCase() || 'flat';
+  const symbolsHint = row.base_symbol || row.quote_symbol || 'unknown';
+  if (preserveOpenExposure && isStrategyStateOpen(state)) {
+    logger.warn(
+      `Remat preserve: skip archive strategy #${row.id} (${apiKeyName}/${symbolsHint}) state=${state}`,
+    );
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (?, 'system', 'remat_preserve_open_leg', ?, CURRENT_TIMESTAMP)`,
+      [
+        Number(options?.tenantId || 0) || null,
+        JSON.stringify({
+          strategyId: row.id,
+          apiKeyName,
+          name: row.name || null,
+          symbol: symbolsHint,
+          priorState: state,
+        }),
+      ],
+    ).catch(() => undefined);
+    return { archived: false, skipped: 'open_exposure' };
+  }
+  await saasArchiveStrategy(apiKeyName, row, { softOnly: true, skipCancel: options?.skipCancel });
+  return { archived: true };
+};
+
+const normalizeExchangeSymbolKey = (symbol: string): string =>
+  String(symbol || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+const collectAllowedSymbolsForStrategyIds = async (strategyIds: number[]): Promise<Set<string>> => {
+  const allowed = new Set<string>();
+  const ids = strategyIds.filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length) return allowed;
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = (await db.all(
+    `SELECT base_symbol, quote_symbol, market_mode
+     FROM strategies WHERE id IN (${placeholders})`,
+    ids,
+  ).catch(() => [])) as Array<{ base_symbol?: string | null; quote_symbol?: string | null; market_mode?: string | null }>;
+  for (const row of rows) {
+    const base = asString(row.base_symbol, '').trim().toUpperCase();
+    const quote = asString(row.quote_symbol, 'USDT').trim().toUpperCase() || 'USDT';
+    if (base) allowed.add(normalizeExchangeSymbolKey(`${base}${quote}`));
+    if (asString(row.market_mode, '').toLowerCase() === 'synthetic' && quote) {
+      allowed.add(normalizeExchangeSymbolKey(`${quote}USDT`));
+    }
+  }
+  return allowed;
+};
+
+const snapshotExchangeOpenSymbols = async (apiKeyName: string): Promise<string[]> => {
+  await ensureExchangeClientInitialized(apiKeyName).catch(() => undefined);
+  const pos = await getPositions(apiKeyName).catch(() => []);
+  const list = Array.isArray(pos) ? pos : ((pos as { positions?: unknown[] })?.positions || []);
+  const out: string[] = [];
+  for (const p of list) {
+    const sz = Math.abs(Number((p as { size?: number; contracts?: number }).size
+      || (p as { contracts?: number }).contracts || 0));
+    if (sz <= 0) continue;
+    const sym = normalizeExchangeSymbolKey(String((p as { symbol?: string }).symbol
+      || (p as { info?: { symbol?: string } }).info?.symbol || ''));
+    if (sym) out.push(sym);
+  }
+  return [...new Set(out)].sort();
+};
+
 const collectPresetCandidates = (offer: CatalogOffer): CatalogPreset[] => {
   const values = [
     ...(offer.presetMatrix
@@ -5024,8 +5109,9 @@ const upsertTenantStrategies = async (
   maxDepositTotal: number,
   riskLevel: Level3,
   activate: boolean,
-  options?: { keepStrategyIds?: number[] },
+  options?: { keepStrategyIds?: number[]; preserveOpenExposure?: boolean },
 ): Promise<StrategyMaterializedRow[]> => {
+  const preserveOpenExposure = options?.preserveOpenExposure === true;
   let existing = await getExistingTenantStrategies(apiKeyName, tenant.slug);
   const keepIds = new Set(
     (options?.keepStrategyIds || [])
@@ -5071,13 +5157,24 @@ const upsertTenantStrategies = async (
       if (keepIds.has(id)) continue;
       const row = existing.find((item) => Number(item.id || 0) === id);
       if (!row) continue;
-      await saasArchiveStrategy(apiKeyName, {
-        id,
-        base_symbol: (row as any).base_symbol ?? null,
-        quote_symbol: (row as any).quote_symbol ?? null,
-        market_mode: (row as any).market_mode ?? null,
-        name: asString(row.name),
-      });
+      if (preserveOpenExposure) {
+        await saasArchiveStrategyForRemat(apiKeyName, {
+          id,
+          base_symbol: (row as any).base_symbol ?? null,
+          quote_symbol: (row as any).quote_symbol ?? null,
+          market_mode: (row as any).market_mode ?? null,
+          name: asString(row.name),
+          state: (row as any).state ?? null,
+        }, { preserveOpenExposure: true, tenantId: tenant.id });
+      } else {
+        await saasArchiveStrategy(apiKeyName, {
+          id,
+          base_symbol: (row as any).base_symbol ?? null,
+          quote_symbol: (row as any).quote_symbol ?? null,
+          market_mode: (row as any).market_mode ?? null,
+          name: asString(row.name),
+        });
+      }
       archivedDupes += 1;
     }
     if (archivedDupes > 0) {
@@ -5252,13 +5349,24 @@ const upsertTenantStrategies = async (
     if (keepIds.has(Number(row.id))) {
       continue;
     }
-    await saasArchiveStrategy(apiKeyName, {
-      id: Number(row.id),
-      base_symbol: (row as any).base_symbol ?? null,
-      quote_symbol: (row as any).quote_symbol ?? null,
-      market_mode: (row as any).market_mode ?? null,
-      name: asString(row.name),
-    });
+    if (preserveOpenExposure) {
+      await saasArchiveStrategyForRemat(apiKeyName, {
+        id: Number(row.id),
+        base_symbol: (row as any).base_symbol ?? null,
+        quote_symbol: (row as any).quote_symbol ?? null,
+        market_mode: (row as any).market_mode ?? null,
+        name: asString(row.name),
+        state: (row as any).state ?? null,
+      }, { preserveOpenExposure: true, tenantId: tenant.id });
+    } else {
+      await saasArchiveStrategy(apiKeyName, {
+        id: Number(row.id),
+        base_symbol: (row as any).base_symbol ?? null,
+        quote_symbol: (row as any).quote_symbol ?? null,
+        market_mode: (row as any).market_mode ?? null,
+        name: asString(row.name),
+      });
+    }
   }
 
   return out;
@@ -15392,6 +15500,7 @@ const materializeAlgofundSystem = async (
     memberWeightScale?: number;
     skipProfilePublishUpdate?: boolean;
     keepStrategyIdsExtra?: number[];
+    preserveOpenExposure?: boolean;
   },
 ) => {
   const { catalog, sweep } = await loadCatalogAndSweepWithFallback();
@@ -15669,7 +15778,7 @@ const materializeAlgofundSystem = async (
     materializeMaxDeposit,
     riskMultiplier <= 0.85 ? 'low' : riskMultiplier >= 1.4 ? 'high' : 'medium',
     activate || profile.requested_enabled === 1,
-    { keepStrategyIds: options?.keepStrategyIdsExtra || [] },
+    { keepStrategyIds: options?.keepStrategyIdsExtra || [], preserveOpenExposure: options?.preserveOpenExposure === true },
   );
 
   if (materializedStrategies.length !== recordsForMaterialization.length) {
@@ -15791,7 +15900,14 @@ const materializeAlgofundSystem = async (
         );
         await ensureExchangeClientInitialized(executionApiKeyName).catch(() => {});
         for (const orphan of orphans) {
-          await saasArchiveStrategy(executionApiKeyName, orphan);
+          if (options?.preserveOpenExposure) {
+            await saasArchiveStrategyForRemat(executionApiKeyName, orphan, {
+              preserveOpenExposure: true,
+              tenantId: tenant.id,
+            });
+          } else {
+            await saasArchiveStrategy(executionApiKeyName, orphan);
+          }
         }
       }
     }
@@ -19611,6 +19727,10 @@ export const materializeAlgofundPortfolioFull = async (payload: {
   portfolioId?: number;
   setKey?: string;
   activate?: boolean;
+  /** Default true — remat never closes open exchange exposure. */
+  preserveOpenExposure?: boolean;
+  /** Default true — cancel resting limits after remat (not positions). */
+  cancelOrdersAfter?: boolean;
 }): Promise<{
   portfolioId: number;
   setKey: string;
@@ -19624,6 +19744,8 @@ export const materializeAlgofundPortfolioFull = async (payload: {
   }>;
   skippedBooks: Array<{ role: string; systemName: string; reason: string }>;
   activeSystems: AlgofundActiveSystem[];
+  exchangeOrphansBefore?: string[];
+  exchangeOrphansAfter?: string[];
 }> => {
   await ensureSaasSeedData();
   const tenant = await getTenantById(payload.tenantId);
@@ -19631,6 +19753,14 @@ export const materializeAlgofundPortfolioFull = async (payload: {
   if (!plan) throw new Error('Algofund plan is required to materialize portfolio');
   const profile = await getAlgofundProfile(payload.tenantId);
   if (!profile) throw new Error('Algofund profile missing');
+
+  const preserveOpenExposure = payload.preserveOpenExposure !== false;
+  const cancelOrdersAfter = payload.cancelOrdersAfter !== false;
+  const executionApiKeyNameEarly = getAlgofundExecutionApiKeyName(tenant, profile);
+  let exchangeOrphansBefore: string[] = [];
+  if (executionApiKeyNameEarly) {
+    exchangeOrphansBefore = await snapshotExchangeOpenSymbols(executionApiKeyNameEarly);
+  }
 
   const assigned = await assignAlgofundPortfolio({
     profileId: payload.tenantId,
@@ -19677,6 +19807,7 @@ export const materializeAlgofundPortfolioFull = async (payload: {
           memberWeightScale: Math.max(0.05, asNumber(member.capital_weight, 1)),
           skipProfilePublishUpdate: true,
           keepStrategyIdsExtra: [...keepAll],
+          preserveOpenExposure,
         },
       );
       const strategyCount = (result.strategyIds || []).length;
@@ -19783,7 +19914,14 @@ export const materializeAlgofundPortfolioFull = async (payload: {
         await ensureExchangeClientInitialized(executionApiKeyName).catch(() => {});
       }
       for (const stale of staleMembers) {
-        await saasArchiveStrategy(executionApiKeyName, stale).catch(() => {});
+        if (preserveOpenExposure) {
+          await saasArchiveStrategyForRemat(executionApiKeyName, stale, {
+            preserveOpenExposure: true,
+            tenantId: tenant.id,
+          }).catch(() => {});
+        } else {
+          await saasArchiveStrategy(executionApiKeyName, stale).catch(() => {});
+        }
       }
       await db.run(`DELETE FROM trading_system_members WHERE system_id = ?`, [Number(row.system_id)]).catch(() => {});
       await db.run(
@@ -19824,7 +19962,14 @@ export const materializeAlgofundPortfolioFull = async (payload: {
     ).catch(() => [])) as Array<{ id: number; name: string; base_symbol: string | null; quote_symbol: string | null; market_mode: string | null; state: string | null }>;
     for (const orphan of orphanRows) {
       if (keepAll.has(Number(orphan.id))) continue;
-      await saasArchiveStrategy(executionApiKeyName, orphan).catch(() => {});
+      if (preserveOpenExposure) {
+        await saasArchiveStrategyForRemat(executionApiKeyName, orphan, {
+          preserveOpenExposure: true,
+          tenantId: tenant.id,
+        }).catch(() => {});
+      } else {
+        await saasArchiveStrategy(executionApiKeyName, orphan).catch(() => {});
+      }
     }
 
     // Hard guarantee: every portfolio book leg is runtime-active after materialize.
@@ -19857,16 +20002,44 @@ export const materializeAlgofundPortfolioFull = async (payload: {
     // Per-leg cancel above can miss symbol-format mismatches / retired MRS books
     // that left dozens of buy/sell limits eating margin (Aug 2026). Runtime cycle
     // re-places needed MRS2 limits on the next tick.
-    try {
-      await ensureExchangeClientInitialized(executionApiKeyName);
-      await cancelAllOrders(executionApiKeyName);
-      logger.info(
-        `Algofund portfolio materialize: cancelAllOrders on ${executionApiKeyName} after remat for ${tenant.slug}`,
-      );
-    } catch (e) {
+    if (cancelOrdersAfter) {
+      try {
+        await ensureExchangeClientInitialized(executionApiKeyName);
+        await cancelAllOrders(executionApiKeyName);
+        logger.info(
+          `Algofund portfolio materialize: cancelAllOrders on ${executionApiKeyName} after remat for ${tenant.slug}`,
+        );
+      } catch (e) {
+        logger.warn(
+          `Algofund portfolio materialize: cancelAllOrders failed for ${executionApiKeyName} (${tenant.slug}): ${(e as Error).message}`,
+        );
+      }
+    }
+  }
+
+  let exchangeOrphansAfter: string[] = [];
+  if (executionApiKeyNameEarly) {
+    exchangeOrphansAfter = await snapshotExchangeOpenSymbols(executionApiKeyNameEarly);
+    const allowedSymbols = await collectAllowedSymbolsForStrategyIds([...keepAll]);
+    const stray = exchangeOrphansAfter.filter((sym) => !allowedSymbols.has(sym));
+    if (stray.length > 0) {
       logger.warn(
-        `Algofund portfolio materialize: cancelAllOrders failed for ${executionApiKeyName} (${tenant.slug}): ${(e as Error).message}`,
+        `Algofund portfolio materialize: exchange positions outside portfolio books for ${tenant.slug} `
+        + `(${executionApiKeyNameEarly}): ${stray.join(', ')} — not auto-closed`,
       );
+      await db.run(
+        `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+         VALUES (?, 'system', 'remat_exchange_orphan_positions', ?, CURRENT_TIMESTAMP)`,
+        [
+          tenant.id,
+          JSON.stringify({
+            apiKeyName: executionApiKeyNameEarly,
+            symbols: stray,
+            allowedCount: allowedSymbols.size,
+            note: 'exchange position not mapped to active portfolio leg — manual review',
+          }),
+        ],
+      ).catch(() => undefined);
     }
   }
 
@@ -19891,6 +20064,8 @@ export const materializeAlgofundPortfolioFull = async (payload: {
     systems: systemsOut,
     skippedBooks,
     activeSystems: assigned.activeSystems,
+    exchangeOrphansBefore,
+    exchangeOrphansAfter,
   };
 };
 

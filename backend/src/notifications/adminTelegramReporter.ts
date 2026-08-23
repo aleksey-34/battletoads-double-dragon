@@ -885,13 +885,15 @@ const formatFairLine = (
   const gap = btRet != null && liveRet != null ? liveRet - btRet : null;
   const freq = drift?.freqX != null ? Number(drift.freqX) : null;
   const over = freq != null && freq > 2.5;
+  const skipped = Number(fair?.skippedSymbols || 0);
   const err = String(fair?.error || '').trim();
   const lines: string[] = [
     `  ${item.short} ${label} ${escapeHtml(dateFrom || '?')}→${escapeHtml(dateTo || '?')}: `
     + `BT ${btRet == null ? (err ? 'fail' : 'n/a') : `${formatSignedPlain(btRet)}% / ${fair.trades}tr`} · `
     + `live ${liveRet == null ? 'n/a' : `${formatSignedPlain(liveRet)}% / ${liveStats?.n ?? '?'}ent`}`
     + (gap == null ? '' : ` · gap ${formatSignedPlain(gap)} п.п.`)
-    + (freq == null ? '' : ` · freq ${freq.toFixed(1)}×${over ? ' ⚠' : ''}`),
+    + (freq == null ? '' : ` · freq ${freq.toFixed(1)}×${over ? ' ⚠' : ''}`)
+    + (skipped > 0 ? ` · skip ${skipped} legs` : ''),
   ];
   const hot = Array.isArray(drift?.hot) ? drift.hot.slice(0, 3) : [];
   if (hot.length) {

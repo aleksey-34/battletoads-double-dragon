@@ -203,7 +203,16 @@ const summarizeBtTrades = (
   return { n, avgNotional: n > 0 ? vol / n : 0, bySym };
 };
 
-const fetchLiveEntryStats = async (apiKeyName: string, fromDate: string, toDate: string) => {
+const fetchLiveEntryStats = async (
+  apiKeyName: string,
+  fromDate: string,
+  toDate: string,
+  strategyIds?: number[],
+) => {
+  const idFilter = (strategyIds || []).filter((id) => Number.isFinite(id) && id > 0);
+  const idClause = idFilter.length
+    ? ` AND lte.strategy_id IN (${idFilter.map(() => '?').join(',')})`
+    : '';
   // Deduplicated count: for synthetic strategies, both legs fire within the same second.
   // We count DISTINCT (strategy_id, second) as one cycle, so synth doesn't double-count.
   const rows = await db.all(
@@ -221,9 +230,11 @@ const fetchLiveEntryStats = async (apiKeyName: string, fromDate: string, toDate:
        AND COALESCE(lte.trade_type, '') = 'entry'
        AND COALESCE(lte.event_origin, 'strategy_signal') = 'strategy_signal'
        AND lte.actual_time >= (strftime('%s', ?) * 1000)
-       AND lte.actual_time <  (strftime('%s', ?) * 1000)
+       AND lte.actual_time <  (strftime('%s', ?) * 1000)${idClause}
      GROUP BY lte.strategy_id`,
-    [apiKeyName, `${fromDate} 00:00:00`, `${toDate} 23:59:59`],
+    idFilter.length
+      ? [apiKeyName, `${fromDate} 00:00:00`, `${toDate} 23:59:59`, ...idFilter]
+      : [apiKeyName, `${fromDate} 00:00:00`, `${toDate} 23:59:59`],
   ) as Array<{
     sid?: number;
     base_symbol?: string;
@@ -262,6 +273,10 @@ const packFairRun = (
 ) => {
   const s = r.summary || {};
   const trades = summarizeBtTrades(r.trades || [], idToSym);
+  const skippedDetails = (r.summary as any)?.skippedStrategyDetails as Array<{ strategyId?: number }> | undefined;
+  const skippedStrategyIds = (skippedDetails || [])
+    .map((item) => Number(item.strategyId || 0))
+    .filter((id) => Number.isFinite(id) && id > 0);
   return {
     dateFrom: fromDate,
     dateTo: toDate,
@@ -273,6 +288,7 @@ const packFairRun = (
     skippedOp: Number(s.skippedByPositionLimit || 0),
     skippedPair: Number(s.skippedByPairLock || 0),
     skippedSymbols: Number(s.skippedStrategies || 0),
+    skippedStrategyIds,
     bySym: trades.bySym,
   };
 };
@@ -764,6 +780,8 @@ const stampPortfolios = async (opts: {
         avgNotional: 0,
         skippedOp: 0,
         skippedPair: 0,
+        skippedSymbols: 0,
+        skippedStrategyIds: [] as number[],
         bySym: {} as Record<string, { n: number; pnl: number; vol: number }>,
         error,
       });
@@ -828,13 +846,19 @@ const stampPortfolios = async (opts: {
       next.fairLive = fairLive;
       next.fairSinceFix = fairSinceFix;
       if (copyKey) {
-        const liveFull = await fetchLiveEntryStats(copyKey, opts.liveFrom, opts.dateTo);
-        const liveFix = await fetchLiveEntryStats(copyKey, fixFrom, opts.dateTo);
+        const ranIdsFull = fairIds.filter((id) => !(fairLive.skippedStrategyIds || []).includes(id));
+        const ranIdsFix = fairIds.filter((id) => !(fairSinceFix.skippedStrategyIds || []).includes(id));
+        const liveFull = await fetchLiveEntryStats(copyKey, opts.liveFrom, opts.dateTo, ranIdsFull);
+        const liveFix = await fetchLiveEntryStats(copyKey, fixFrom, opts.dateTo, ranIdsFix);
         next.tradeDrift = {
           full: tradeDriftVsLive(fairLive, liveFull),
           sinceFix: tradeDriftVsLive(fairSinceFix, liveFix),
           liveFull: { n: liveFull.n, avgNotional: +liveFull.avgNotional.toFixed(2) },
           liveSinceFix: { n: liveFix.n, avgNotional: +liveFix.avgNotional.toFixed(2) },
+          comparableLegsFull: ranIdsFull.length,
+          comparableLegsSinceFix: ranIdsFix.length,
+          skippedLegsFull: (fairLive.skippedStrategyIds || []).length,
+          skippedLegsSinceFix: (fairSinceFix.skippedStrategyIds || []).length,
         };
       }
     }

@@ -9,7 +9,7 @@
     "start:research": "node dist/research-main.js",
     "telegram:test-admin": "node dist/scripts/sendAdminTelegramTest.js",
     "build": "tsc",
-    "test:unit": "npm run build && node --test dist/research/momentumScalpSignal.test.js",
+    "test:unit": "npm run build && node --test dist/backtest/backtestWarmupRange.test.js dist/monitoring/tradeFlowEnrichment.test.js dist/research/momentumScalpSignal.test.js dist/bot/strategy/closedBarDedupe.test.js dist/bot/strategy/normalize.test.js dist/bot/strategy/cycle/algofundSync.test.js dist/services/fearBoost.test.js",
     "dev": "ts-node --watch src/server.ts",
     "compare:tv": "ts-node src/backtest/compareTvTrades.ts",
     "test:integration": "cucumber-js --require-module ts-node/register --require tests/integration/steps/**/*.ts tests/integration/features/**/*.feature",

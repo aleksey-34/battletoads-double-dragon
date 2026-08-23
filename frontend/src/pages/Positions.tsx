@@ -1673,6 +1673,7 @@ const Positions: React.FC = () => {
           tradeMarkers={monChartTradeMarkers}
           loading={monChartLoading}
           currencyLabel="USD"
+          apiKeyName={monChartKey}
           onBackfillFromExchange={handleBackfillFromExchange}
           backfillLoading={monChartBackfillLoading}
           backfillSupported={monChartBackfillSupported}

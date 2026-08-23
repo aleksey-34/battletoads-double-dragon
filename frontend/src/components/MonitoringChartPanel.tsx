@@ -1,6 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Button, Checkbox, Segmented, Space, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Checkbox, Collapse, Segmented, Space, Table, Tag, Typography, message } from 'antd';
 import ChartComponent from './ChartComponent';
+import MonitoringSymbolChartModal from './MonitoringSymbolChartModal';
+import {
+  EnrichedMonitoringTradeRow,
+  MonitoringTradeGroupMode,
+  enrichMonitoringTrades,
+  flowTypeLabel,
+  groupMonitoringTrades,
+  pnlBucketLabel,
+} from '../utils/monitoringTradeEnrichment';
 
 export type MonitoringSnapshot = {
   recorded_at?: string;
@@ -40,6 +49,8 @@ export type MonitoringTradeRow = {
   fee: number | null;
   time: string;
   strategyId: number | null;
+  /** Original entry price stored on exit rows (live_trade_events.entry_price). */
+  entryPrice?: number | null;
 };
 
 export type MonitoringTradeFrequencyPoint = {
@@ -158,6 +169,7 @@ type MonitoringChartPanelProps = {
   tradeMarkers?: MonitoringTradeMarker[];
   loading?: boolean;
   currencyLabel?: string;
+  apiKeyName?: string;
   /** On-demand: pull equity history from the exchange (Bybit). */
   onBackfillFromExchange?: () => void | Promise<void>;
   backfillLoading?: boolean;
@@ -176,6 +188,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   tradeMarkers: _tradeMarkers = [],
   loading = false,
   currencyLabel = 'USD',
+  apiKeyName = '',
   onBackfillFromExchange,
   backfillLoading = false,
   backfillSupported = true,
@@ -186,6 +199,19 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   const [showDd, setShowDd] = useState(false);
   const [showFreq, setShowFreq] = useState(false);
   const [equityAsReturn, setEquityAsReturn] = useState(true);
+  const [tradeGroupMode, setTradeGroupMode] = useState<MonitoringTradeGroupMode>('none');
+  const [chartSymbol, setChartSymbol] = useState<string | null>(null);
+
+  const enrichedTrades = useMemo(() => enrichMonitoringTrades(trades), [trades]);
+  const tradeGroups = useMemo(
+    () => groupMonitoringTrades(enrichedTrades, tradeGroupMode),
+    [enrichedTrades, tradeGroupMode],
+  );
+
+  const chartSymbolTrades = useMemo(() => {
+    if (!chartSymbol) return [];
+    return enrichedTrades.filter((t) => String(t.symbol).toUpperCase() === chartSymbol);
+  }, [chartSymbol, enrichedTrades]);
 
   const freqPoints = useMemo(() => {
     const fromApi = (Array.isArray(tradeFrequency) ? tradeFrequency : [])
@@ -238,14 +264,16 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     if (trades.length > 0) {
       downloadCsv(
         `monitoring-trades-${stamp}.csv`,
-        ['time', 'tradeType', 'side', 'symbol', 'price', 'size', 'fee', 'strategyId'],
-        trades.map((row) => [
+        ['time', 'flowType', 'tradeType', 'side', 'symbol', 'price', 'size', 'pnlPercent', 'fee', 'strategyId'],
+        enrichedTrades.map((row) => [
           row.time,
+          row.flowType,
           row.tradeType,
           row.side,
           row.symbol,
           row.price,
           row.size,
+          row.pnlPercent,
           row.fee,
           row.strategyId,
         ]),
@@ -353,33 +381,117 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     setShowFreq(key === 'freq');
   };
 
+  const flowTagColor = (flow: EnrichedMonitoringTradeRow['flowType']) => {
+    if (flow === 'in') return 'blue';
+    if (flow === 'out') return 'orange';
+    return 'purple';
+  };
+
   const tradeColumns = [
     {
       title: 'Время',
       dataIndex: 'time',
-      width: 140,
+      width: 132,
+      sorter: (a: EnrichedMonitoringTradeRow, b: EnrichedMonitoringTradeRow) =>
+        Date.parse(String(a.time || '')) - Date.parse(String(b.time || '')),
+      defaultSortOrder: 'descend' as const,
       render: (v: string) => (v ? new Date(v).toLocaleString('ru-RU', {
         day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
       }) : '—'),
     },
     {
       title: 'Тип',
-      dataIndex: 'tradeType',
-      width: 70,
-      render: (v: string) => (
-        <Tag color={v === 'entry' ? 'blue' : 'orange'}>{v === 'entry' ? 'IN' : 'OUT'}</Tag>
+      dataIndex: 'flowType',
+      width: 72,
+      filters: [
+        { text: 'IN — вход', value: 'in' },
+        { text: 'OUT — выход', value: 'out' },
+        { text: 'REV — переворот', value: 'reverse' },
+      ],
+      onFilter: (value: React.Key | boolean, row: EnrichedMonitoringTradeRow) => row.flowType === value,
+      render: (v: EnrichedMonitoringTradeRow['flowType']) => (
+        <Tag color={flowTagColor(v)} title={
+          v === 'in' ? 'Открытие позиции'
+            : v === 'out' ? 'Закрытие позиции'
+              : 'Переворот: вход в противоположную сторону без отдельного OUT'
+        }
+        >
+          {flowTypeLabel[v] || v}
+        </Tag>
       ),
     },
     {
       title: 'Сторона',
       dataIndex: 'side',
-      width: 70,
+      width: 72,
+      filters: [
+        { text: 'long', value: 'long' },
+        { text: 'short', value: 'short' },
+      ],
+      onFilter: (value: React.Key | boolean, row: EnrichedMonitoringTradeRow) => row.side === value,
       render: (v: string) => (
         <span style={{ color: v === 'long' ? '#16a34a' : '#dc2626' }}>{v}</span>
       ),
     },
-    { title: 'Символ', dataIndex: 'symbol', width: 90 },
+    {
+      title: 'Символ',
+      dataIndex: 'symbol',
+      width: 96,
+      sorter: (a: EnrichedMonitoringTradeRow, b: EnrichedMonitoringTradeRow) =>
+        String(a.symbol).localeCompare(String(b.symbol)),
+    },
+    {
+      title: 'PnL %',
+      dataIndex: 'pnlPercent',
+      width: 88,
+      sorter: (a: EnrichedMonitoringTradeRow, b: EnrichedMonitoringTradeRow) =>
+        Number(a.pnlPercent ?? -999) - Number(b.pnlPercent ?? -999),
+      filters: [
+        { text: 'Профит', value: 'profit' },
+        { text: 'Убыток', value: 'loss' },
+        { text: '— (вход)', value: 'pending' },
+      ],
+      onFilter: (value: React.Key | boolean, row: EnrichedMonitoringTradeRow) => {
+        if (value === 'profit') return row.pnlPercent != null && row.pnlPercent >= 0;
+        if (value === 'loss') return row.pnlPercent != null && row.pnlPercent < 0;
+        return row.pnlPercent == null;
+      },
+      render: (v: number | null) => {
+        if (v == null || !Number.isFinite(v)) {
+          return <Typography.Text type="secondary">—</Typography.Text>;
+        }
+        const color = v >= 0 ? '#16a34a' : '#dc2626';
+        return <span style={{ color, fontWeight: 600 }}>{fmtSignedPct(v)}</span>;
+      },
+    },
+    {
+      title: '',
+      key: 'chart',
+      width: 88,
+      render: (_: unknown, row: EnrichedMonitoringTradeRow) => (
+        apiKeyName ? (
+          <Button
+            size="small"
+            type="link"
+            onClick={() => setChartSymbol(String(row.symbol || '').toUpperCase())}
+          >
+            График
+          </Button>
+        ) : null
+      ),
+    },
   ];
+
+  const renderTradesTable = (data: EnrichedMonitoringTradeRow[], keyPrefix = '') => (
+    <Table
+      size="small"
+      rowKey={(row) => `${keyPrefix}${row.id}-${row.time}`}
+      pagination={{ pageSize: 10, size: 'small' }}
+      dataSource={data}
+      columns={tradeColumns}
+      scroll={{ x: 560 }}
+    />
+  );
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -567,23 +679,75 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
         </div>
       )}
 
-      {trades.length > 0 ? (
+      {enrichedTrades.length > 0 ? (
         <div>
-          <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
-            Сделки за период ({trades.length}
-            {trades.length >= 200 ? ', показаны последние 200' : ''}
-            )
+          <Space wrap style={{ justifyContent: 'space-between', width: '100%', marginBottom: 8 }}>
+            <Typography.Text strong>
+              Сделки за период ({enrichedTrades.length}
+              {trades.length >= 200 ? ', показаны последние 200' : ''}
+              )
+            </Typography.Text>
+            <Segmented
+              size="small"
+              value={tradeGroupMode}
+              onChange={(v) => setTradeGroupMode(v as MonitoringTradeGroupMode)}
+              options={[
+                { label: 'Список', value: 'none' },
+                { label: 'Символ', value: 'symbol' },
+                { label: 'Тип', value: 'flowType' },
+                { label: 'Сторона', value: 'side' },
+                { label: 'PnL', value: 'pnl' },
+              ]}
+            />
+          </Space>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
+            IN — вход · OUT — выход · REV — переворот (long→short или short→long на той же паре).
+            PnL% считается на OUT по цене входа.
           </Typography.Text>
-          <Table
-            size="small"
-            rowKey="id"
-            pagination={{ pageSize: 10, size: 'small' }}
-            dataSource={trades}
-            columns={tradeColumns}
-            scroll={{ x: 420 }}
-          />
+          {tradeGroupMode === 'none' || !tradeGroups ? (
+            renderTradesTable(enrichedTrades)
+          ) : (
+            <Collapse
+              size="small"
+              items={tradeGroups.map((group) => ({
+                key: group.key,
+                label: (
+                  <Space wrap>
+                    <span>{group.label}</span>
+                    <Tag>{group.rows.length}</Tag>
+                    {group.totalPnl != null ? (
+                      <Tag color={group.totalPnl >= 0 ? 'green' : 'red'}>
+                        Σ {fmtSignedPct(group.totalPnl)}
+                      </Tag>
+                    ) : null}
+                    {tradeGroupMode === 'symbol' && apiKeyName ? (
+                      <Button
+                        size="small"
+                        type="link"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setChartSymbol(group.key);
+                        }}
+                      >
+                        График
+                      </Button>
+                    ) : null}
+                  </Space>
+                ),
+                children: renderTradesTable(group.rows, `${group.key}-`),
+              }))}
+            />
+          )}
         </div>
       ) : null}
+
+      <MonitoringSymbolChartModal
+        open={!!chartSymbol && !!apiKeyName}
+        apiKeyName={apiKeyName}
+        symbol={chartSymbol || ''}
+        trades={chartSymbolTrades}
+        onClose={() => setChartSymbol(null)}
+      />
     </Space>
   );
 };

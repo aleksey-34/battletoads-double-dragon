@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger';
 import { computeChannelWidthLotMultiplier } from '../services/strategy/sizing';
+import { resolveBacktestRangeIndices } from './backtestWarmupRange';
 import {
   PortfolioCircuitBreakerConfig,
   PortfolioCircuitBreakerTracker,
@@ -112,6 +113,7 @@ export type BacktestSummary = {
   dateToMs: number | null;
   warmupBars: number;
   skippedStrategies: number;
+  skippedStrategyDetails?: Array<{ strategyId: number; strategyName: string; reason: string }>;
   processedStrategies: number;
   initialBalance: number;
   finalEquity: number;
@@ -2476,17 +2478,26 @@ const loadRuntimeStrategies = async (
       }
     }
 
-    const startIndex = Math.max(effectiveLength, firstInRangeIndex + warmupBars);
-    const endIndex = Math.min(candles.length - 1, lastInRangeIndex);
-
-    if (endIndex <= startIndex) {
-      const reason = 'No executable candles after warmup in selected date range';
+    // Warmup bars are loaded BEFORE dateFrom (see fetchStartMs). Indicators at
+    // firstInRangeIndex already see candles[0..firstInRangeIndex-1] as history —
+    // do NOT add warmupBars again on top of the range start (that wrongly skips
+    // short sinceFix windows for 4h legs: 13d range < 120×4h warmup extension).
+    const range = resolveBacktestRangeIndices({
+      effectiveLength,
+      warmupBars,
+      firstInRangeIndex,
+      lastInRangeIndex,
+      candlesLength: candles.length,
+    });
+    if (!range.ok) {
       if (request.skipMissingSymbols) {
-        skipped.push({ strategyId: Number(strategy.id), strategyName: strategy.name, reason });
+        skipped.push({ strategyId: Number(strategy.id), strategyName: strategy.name, reason: range.reason });
         continue;
       }
-      throw new Error(`Strategy ${strategy.name}: ${reason}`);
+      throw new Error(`Strategy ${strategy.name}: ${range.reason}`);
     }
+    const startIndex = range.startIndex;
+    const endIndex = range.endIndex;
 
     const strategyType = normalizeStrategyType(strategy.strategy_type);
     const zzPivotLevelSeries = isZzPivotStrategyType(normalizeZzPivotStrategyType(strategyType) as StrategyType)
@@ -3615,6 +3626,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     dateToMs: request.dateToMs,
     warmupBars: request.warmupBars,
     skippedStrategies: runtimeLoad.skipped.length,
+    skippedStrategyDetails: runtimeLoad.skipped,
     processedStrategies: runtimes.length,
     initialBalance: request.initialBalance,
     finalEquity,

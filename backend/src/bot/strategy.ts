@@ -1323,6 +1323,55 @@ export const executeStrategy = async (
     });
   }
 
+  // Cross-cycle guard: mixed/resync/desync exits set last_action but not closedAction.
+  // Without this, live can churn entry→exit→re-entry on the same 4h bar (BCH/APE pattern).
+  if (
+    state === 'flat'
+    && !closedAction
+    && (signal === 'long' || signal === 'short')
+  ) {
+    const lastAction = String(mergedStrategy.last_action || '');
+    const exitMarkers = [
+      'desync_closed',
+      'state_resynced',
+      'take_profit_',
+      'stop_loss_',
+      'mean_revert_exit',
+      'macro_shield_exit',
+      'same_bar_no_reentry',
+    ];
+    const recentExit = exitMarkers.some((m) => lastAction.includes(m));
+    if (recentExit && mergedStrategy.updated_at) {
+      const updatedAtMs = new Date(String(mergedStrategy.updated_at).replace(' ', 'T') + 'Z').getTime();
+      if (Number.isFinite(updatedAtMs) && updatedAtMs >= evaluatedBarTimeMs) {
+        const updated = await updateStrategy(apiKeyName, strategyId, {
+          ...executionBindingPatch,
+          state: 'flat',
+          entry_ratio: null,
+          tp_anchor_ratio: null,
+          last_signal: signal,
+          last_action: `post_exit_same_bar_no_reentry@${currentRatio}`,
+          last_error: null,
+        });
+
+        logger.info(
+          `Post-exit same-bar re-entry blocked for strategy ${strategyId} (${apiKeyName}): `
+          + `last_action=${lastAction}, bar=${evaluatedBarIso}`
+        );
+
+        return returnWithProcessedBar({
+          result: 'Recent exit on current closed bar; re-entry deferred',
+          action: 'post_exit_same_bar_no_reentry',
+          strategy: updated,
+          currentRatio,
+          donchianHigh,
+          donchianLow,
+          donchianCenter,
+        });
+      }
+    }
+  }
+
   // CT multi-bar re-entry cooldown (CT_REENTRY_MIN_BARS). Default 0 = disabled beyond same-bar guard.
   // On 4h, 3 bars ≈ 12h; on 1h, 12 bars ≈ 12h. Reduces LINK/HBAR churn without changing TF.
   if (
