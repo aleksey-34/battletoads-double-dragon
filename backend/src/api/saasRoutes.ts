@@ -201,7 +201,7 @@ router.get('/partner/monitoring/:apiKeyName', requirePartnerOrAdmin, async (req,
       || String(req.query.includeTradesRows || '').toLowerCase() === 'true';
     const all = String(req.query.all || '0') === '1'
       || String(req.query.all || '').toLowerCase() === 'true';
-    const skipScopeCheck = Boolean(req.adminAuth);
+    const skipScopeCheck = Boolean((req as any).adminAuth);
     res.json(await getPartnerMonitoringSeries(apiKeyName, { days, limit, all, includeTradesRows, skipScopeCheck }));
   } catch (error) {
     const err = error as Error & { statusCode?: number };
@@ -216,7 +216,7 @@ router.post('/partner/monitoring/:apiKeyName/backfill-equity', requirePartnerOrA
     if (!apiKeyName) {
       return res.status(400).json({ error: 'apiKeyName required' });
     }
-    if (!req.adminAuth && !(await isPartnerScopedApiKey(apiKeyName))) {
+    if (!(req as any).adminAuth && !(await isPartnerScopedApiKey(apiKeyName))) {
       return res.status(403).json({ error: 'Forbidden: apiKeyName is outside partner scope' });
     }
     const maxDaysRaw = Number.parseInt(String(req.body?.maxDays ?? '90'), 10);
