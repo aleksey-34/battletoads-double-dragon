@@ -16,6 +16,19 @@ export type StrategyChartStrategy = {
   take_profit_percent: number;
   state: 'flat' | 'long' | 'short' | string;
   entry_ratio?: number | null;
+  last_signal?: string | null;
+};
+
+export type TradeRoundTrip = {
+  entry: StrategyTradeEvent;
+  exit?: StrategyTradeEvent;
+};
+
+export type TradeFlowSummary = {
+  roundTrips: TradeRoundTrip[];
+  openTrip?: TradeRoundTrip;
+  upnlPercent: number | null;
+  lastSignal: string;
 };
 
 export type StrategyTradeEvent = {
@@ -152,6 +165,251 @@ export const strategyPairSymbols = (strategy: StrategyChartStrategy): string[] =
   return [strategy.base_symbol, strategy.quote_symbol]
     .map((symbol) => String(symbol || '').toUpperCase().trim())
     .filter((symbol, index, array) => Boolean(symbol) && array.indexOf(symbol) === index);
+};
+
+/** Display symbol without ORDIUSDTUSDT-style duplication. */
+export const formatStrategyDisplaySymbol = (strategy: Pick<StrategyChartStrategy, 'market_mode' | 'base_symbol' | 'quote_symbol'>): string => {
+  const base = String(strategy.base_symbol || '').trim().toUpperCase();
+  const quote = String(strategy.quote_symbol || 'USDT').trim().toUpperCase();
+  if (strategy.market_mode === 'synthetic') {
+    return `${base}/${quote}`;
+  }
+  if (!base) {
+    return quote;
+  }
+  if (base.endsWith(quote) || base.endsWith('USDT') || base.endsWith('USDC')) {
+    return base;
+  }
+  return `${base}${quote}`;
+};
+
+const formatPnlPercent = (value: number): string => {
+  if (!Number.isFinite(value)) {
+    return '—';
+  }
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${value.toFixed(1)}%`;
+};
+
+export const roundTripPnlPercent = (entry: StrategyTradeEvent, exit: StrategyTradeEvent): number => {
+  const ep = Number(entry.price);
+  const xp = Number(exit.price);
+  if (!Number.isFinite(ep) || !Number.isFinite(xp) || ep <= 0) {
+    return 0;
+  }
+  if (entry.side === 'long') {
+    return ((xp - ep) / ep) * 100;
+  }
+  return ((ep - xp) / ep) * 100;
+};
+
+export const pairStrategyRoundTrips = (events: StrategyTradeEvent[], strategyId?: number): TradeRoundTrip[] => {
+  const sorted = [...events]
+    .filter((e) => (strategyId === undefined || e.strategyId === strategyId))
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  const openEntries: StrategyTradeEvent[] = [];
+  const trips: TradeRoundTrip[] = [];
+
+  for (const event of sorted) {
+    if (event.tradeType === 'entry') {
+      openEntries.push(event);
+      continue;
+    }
+    let matchIdx = -1;
+    for (let i = openEntries.length - 1; i >= 0; i -= 1) {
+      if (openEntries[i].side === event.side) {
+        matchIdx = i;
+        break;
+      }
+    }
+    if (matchIdx >= 0) {
+      const [entry] = openEntries.splice(matchIdx, 1);
+      trips.push({ entry, exit: event });
+    }
+  }
+  for (const entry of openEntries) {
+    trips.push({ entry });
+  }
+  return trips;
+};
+
+const eventTimeSec = (event: StrategyTradeEvent): number | null => {
+  const ms = normalizeTimestampMs(event.timestamp);
+  return ms === null ? null : Math.floor(ms / 1000);
+};
+
+const latestCloseFromChart = (chartData: unknown[]): number | null => {
+  const candles = chartData
+    .map(parseCandlePoint)
+    .filter((item): item is ParsedCandlePoint => !!item)
+    .sort((a, b) => a.time - b.time);
+  if (candles.length === 0) {
+    return null;
+  }
+  const close = Number(candles[candles.length - 1].close);
+  return Number.isFinite(close) && close > 0 ? close : null;
+};
+
+export const computeOpenUpnlPercent = (
+  strategy: StrategyChartStrategy,
+  openEntry: StrategyTradeEvent | undefined,
+  chartData: unknown[],
+): number | null => {
+  const entryPrice = Number(openEntry?.price ?? strategy.entry_ratio);
+  const mark = latestCloseFromChart(chartData);
+  if (!Number.isFinite(entryPrice) || entryPrice <= 0 || mark === null) {
+    return null;
+  }
+  const state = String(strategy.state || 'flat').toLowerCase();
+  if (state === 'long') {
+    return ((mark - entryPrice) / entryPrice) * 100;
+  }
+  if (state === 'short') {
+    return ((entryPrice - mark) / entryPrice) * 100;
+  }
+  return null;
+};
+
+export const buildTradeFlowSummary = (
+  strategy: StrategyChartStrategy,
+  events: StrategyTradeEvent[],
+  chartData: unknown[],
+): TradeFlowSummary => {
+  const trips = pairStrategyRoundTrips(events, strategy.id);
+  const completed = trips.filter((t) => t.exit);
+  const openCandidates = trips.filter((t) => !t.exit);
+  const openTrip = openCandidates.length > 0 ? openCandidates[openCandidates.length - 1] : undefined;
+  return {
+    roundTrips: completed.slice(-8),
+    openTrip,
+    upnlPercent: computeOpenUpnlPercent(strategy, openTrip?.entry, chartData),
+    lastSignal: String(strategy.last_signal || '').trim() || '—',
+  };
+};
+
+const MAX_FLOW_TRIPS = 6;
+
+export const buildTradeFlowLayers = (
+  strategy: StrategyChartStrategy,
+  events: StrategyTradeEvent[],
+  chartData: unknown[],
+  idPrefix: string,
+): { overlayLines: OverlayLine[]; markers: ChartMarker[]; summary: TradeFlowSummary } => {
+  const summary = buildTradeFlowSummary(strategy, events, chartData);
+  const displaySymbol = formatStrategyDisplaySymbol(strategy);
+  const overlayLines: OverlayLine[] = [];
+  const markers: ChartMarker[] = [];
+  const bounds = chartTimeBoundsFromCandles(chartData);
+
+  const tripsToDraw = [
+    ...summary.roundTrips.slice(-MAX_FLOW_TRIPS),
+    ...(summary.openTrip ? [summary.openTrip] : []),
+  ];
+
+  tripsToDraw.forEach((trip, index) => {
+    const entrySec = eventTimeSec(trip.entry);
+    const entryPrice = Number(trip.entry.price);
+    if (entrySec === null || !Number.isFinite(entryPrice) || entryPrice <= 0) {
+      return;
+    }
+    if (bounds && (entrySec < bounds.minSec || entrySec > bounds.maxSec)) {
+      return;
+    }
+
+    const isLong = trip.entry.side === 'long';
+    const entryColor = isLong ? '#16a34a' : '#dc2626';
+
+    if (trip.exit) {
+      const exitSec = eventTimeSec(trip.exit);
+      const exitPrice = Number(trip.exit.price);
+      if (exitSec === null || !Number.isFinite(exitPrice) || exitPrice <= 0) {
+        return;
+      }
+      const pnl = roundTripPnlPercent(trip.entry, trip.exit);
+      const flowColor = pnl >= 0 ? '#22c55e' : '#ef4444';
+
+      overlayLines.push({
+        id: `${idPrefix}:flow:${index}`,
+        color: flowColor,
+        lineWidth: 2,
+        data: [
+          { time: entrySec, value: entryPrice },
+          { time: exitSec, value: exitPrice },
+        ],
+      });
+
+      markers.push({
+        id: `${idPrefix}:in:${trip.entry.id}`,
+        time: entrySec,
+        color: entryColor,
+        shape: isLong ? 'arrowUp' : 'arrowDown',
+        position: isLong ? 'belowBar' : 'aboveBar',
+        text: `IN ${isLong ? 'L' : 'S'}`,
+      });
+      markers.push({
+        id: `${idPrefix}:out:${trip.exit.id}`,
+        time: exitSec,
+        color: flowColor,
+        shape: isLong ? 'arrowDown' : 'arrowUp',
+        position: isLong ? 'aboveBar' : 'belowBar',
+        text: `OUT ${formatPnlPercent(pnl)}`,
+      });
+      return;
+    }
+
+    // Open leg — arrow to current mark (UPnL preview)
+    const mark = latestCloseFromChart(chartData);
+    const upnl = summary.upnlPercent;
+    const lastCandle = chartData
+      .map(parseCandlePoint)
+      .filter((item): item is ParsedCandlePoint => !!item)
+      .sort((a, b) => a.time - b.time)
+      .pop();
+    const markSec = lastCandle ? normalizeOverlayTime(lastCandle.time) : entrySec;
+
+    if (mark !== null && markSec > entrySec) {
+      const previewColor = upnl !== null && upnl >= 0 ? '#22c55e' : '#f97316';
+      overlayLines.push({
+        id: `${idPrefix}:flow-open:${index}`,
+        color: previewColor,
+        lineWidth: 2,
+        data: [
+          { time: entrySec, value: entryPrice },
+          { time: markSec, value: mark },
+        ],
+      });
+    }
+
+    markers.push({
+      id: `${idPrefix}:open-in:${trip.entry.id}`,
+      time: entrySec,
+      color: entryColor,
+      shape: isLong ? 'arrowUp' : 'arrowDown',
+      position: isLong ? 'belowBar' : 'aboveBar',
+      text: `IN ${displaySymbol} @ ${entryPrice.toFixed(4)}`,
+    });
+    if (upnl !== null) {
+      markers.push({
+        id: `${idPrefix}:open-upnl:${trip.entry.id}`,
+        time: markSec,
+        color: upnl >= 0 ? '#16a34a' : '#dc2626',
+        shape: 'circle',
+        position: 'aboveBar',
+        text: `UPnL ${formatPnlPercent(upnl)}`,
+      });
+    }
+  });
+
+  return { overlayLines, markers, summary };
+};
+
+const normalizeOverlayTime = (time: number): number => {
+  const numeric = Number(time);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  return numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
 };
 
 export const buildDonchianSnapshot = (
@@ -449,13 +707,14 @@ export const buildStrategyTradeMarkers = (
 export type OpenStrategyChartLayers = {
   overlayLines: OverlayLine[];
   markers: ChartMarker[];
+  summary?: TradeFlowSummary;
 };
 
 export const buildOpenStrategyChartLayers = (
   strategy: StrategyChartStrategy,
   chartData: unknown[],
   strategyEvents: StrategyTradeEvent[],
-  exchangeTrades: TradeHistoryRow[],
+  _exchangeTrades: TradeHistoryRow[],
   idPrefix: string,
 ): OpenStrategyChartLayers => {
   const donchian = buildDonchianSnapshot(
@@ -489,25 +748,20 @@ export const buildOpenStrategyChartLayers = (
     ? buildTpOverlay(chartData, `${idPrefix}:tp`, Number(activeTpRatio))
     : null;
 
-  const symbols = strategyPairSymbols(strategy);
-  const tradeMarkers = buildStrategyTradeMarkers(
-    strategyEvents,
-    exchangeTrades,
-    symbols,
-    strategy.id,
-    chartData,
-  );
-  const openPositionMarkers = buildOpenPositionMarkers(strategy, chartData, entryRatioValue);
+  const strategyEventsFiltered = strategyEvents.filter((e) => e.strategyId === strategy.id);
+  const flow = buildTradeFlowLayers(strategy, strategyEventsFiltered, chartData, idPrefix);
 
   const overlayLines: OverlayLine[] = [
     ...(donchian ? donchian.overlays : []),
     ...(tpWave ? tpWave.overlays : []),
     ...(entryOverlay ? [entryOverlay] : []),
     ...(tpOverlay ? [tpOverlay] : []),
+    ...flow.overlayLines,
   ];
 
   return {
     overlayLines,
-    markers: [...tradeMarkers, ...openPositionMarkers],
+    markers: flow.markers,
+    summary: flow.summary,
   };
 };

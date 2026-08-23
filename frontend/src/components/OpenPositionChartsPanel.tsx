@@ -21,6 +21,13 @@ type LoadedChart = {
   error?: string;
 };
 
+const formatPnlTag = (value: number | null | undefined): string => {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '—';
+  }
+  return `${value > 0 ? '+' : ''}${value.toFixed(1)}%`;
+};
+
 const isOpenState = (state: unknown): boolean => {
   const normalized = String(state || 'flat').toLowerCase();
   return normalized === 'long' || normalized === 'short';
@@ -40,6 +47,7 @@ const mapStrategyRow = (row: Record<string, unknown>): StrategyChartStrategy => 
   take_profit_percent: Number(row.take_profit_percent) || 0,
   state: String(row.state || 'flat') as StrategyChartStrategy['state'],
   entry_ratio: row.entry_ratio === null || row.entry_ratio === undefined ? null : Number(row.entry_ratio),
+  last_signal: row.last_signal != null ? String(row.last_signal) : null,
 });
 
 const mapStrategyTradeEvent = (row: Record<string, unknown>): StrategyTradeEvent | null => {
@@ -195,13 +203,35 @@ const OpenPositionChartsPanel: React.FC<Props> = ({ apiKeyName, active = true, c
       children: loaded?.error ? (
         <Alert type="error" showIcon message={loaded.error} />
       ) : (
-        <ChartComponent
-          data={loaded?.data || []}
-          type="candlestick"
-          overlayLines={loaded?.layers.overlayLines || []}
-          markers={loaded?.layers.markers || []}
-          fixedHeight={compact ? 280 : 360}
-        />
+        <>
+          {loaded?.layers.summary ? (
+            <div style={{ fontSize: 12, color: '#4b5563', marginBottom: 8, lineHeight: 1.5 }}>
+              <div>
+                <strong>Сигнал:</strong> {loaded.layers.summary.lastSignal}
+                {' · '}
+                <strong>Закрытых round-trip:</strong> {loaded.layers.summary.roundTrips.length}
+                {loaded.layers.summary.openTrip ? (
+                  <>
+                    {' · '}
+                    <strong>Открыта:</strong> {String(strategy.state).toUpperCase()}
+                    {' '}
+                    UPnL {formatPnlTag(loaded.layers.summary.upnlPercent)}
+                  </>
+                ) : null}
+              </div>
+              <div style={{ color: '#6b7280', marginTop: 2 }}>
+                Линия IN→OUT = сделка; на выходе % PnL. Несколько L/X раньше — это DCA/частичные филлы, теперь сведены в пары.
+              </div>
+            </div>
+          ) : null}
+          <ChartComponent
+            data={loaded?.data || []}
+            type="candlestick"
+            overlayLines={loaded?.layers.overlayLines || []}
+            markers={loaded?.layers.markers || []}
+            fixedHeight={compact ? 280 : 360}
+          />
+        </>
       ),
     };
   }), [chartsByStrategyId, compact, openStrategies]);
@@ -245,7 +275,7 @@ const OpenPositionChartsPanel: React.FC<Props> = ({ apiKeyName, active = true, c
       {expanded && !loading && openStrategies.length > 0 ? (
         <>
           <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
-            Donchian + Entry/TP + филлы (стрелки). Синтетика и mono. Данные по клику, без фоновой нагрузки.
+            Donchian + Entry/TP. Сделки: линия IN→OUT со стрелкой, на выходе % PnL; открытая — UPnL до текущей цены.
           </Typography.Paragraph>
           <Collapse items={collapseItems} defaultActiveKey={openStrategies.length === 1 ? [String(openStrategies[0].id)] : undefined} />
         </>
