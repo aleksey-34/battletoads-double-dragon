@@ -17,6 +17,7 @@ import {
   type AlgofundRoleBookMember,
 } from '../bot/strategy/cycle/algofundSync';
 import { knobsForRecipeBook } from './hamfiveRecipeKnobs';
+import { tradeDriftVsLive } from './tradeDriftVsLive';
 
 type CandleRow = [number, number, number, number, number, number?];
 
@@ -291,24 +292,6 @@ const packFairRun = (
     skippedStrategyIds,
     bySym: trades.bySym,
   };
-};
-
-const tradeDriftVsLive = (
-  bt: { trades: number; bySym: Record<string, { n: number }> },
-  live: { n: number; bySym: Record<string, { n: number }> },
-): { freqX: number | null; hot: Array<{ sym: string; bt: number; live: number }> } => {
-  const freqX = bt.trades > 0 ? +(live.n / bt.trades).toFixed(2) : null;
-  const hot: Array<{ sym: string; bt: number; live: number }> = [];
-  const syms = new Set([...Object.keys(bt.bySym || {}), ...Object.keys(live.bySym || {})]);
-  for (const sym of syms) {
-    const b = bt.bySym?.[sym]?.n || 0;
-    const l = live.bySym?.[sym]?.n || 0;
-    if (l >= 8 && (b === 0 || l > b * 2)) {
-      hot.push({ sym, bt: b, live: l });
-    }
-  }
-  hot.sort((a, c) => (c.live - c.bt) - (a.live - a.bt));
-  return { freqX, hot: hot.slice(0, 6) };
 };
 
 const collectHamfiveSymbols = (recipe: any): Set<string> => {

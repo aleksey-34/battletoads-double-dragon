@@ -1,5 +1,6 @@
 
 import { MarketMode, Strategy, StrategyType } from '../config/settings';
+import { evaluateSameBarNoReentry } from './strategy/sameBarNoReentry';
 import {
   applySymbolRiskSettings,
   closePosition,
@@ -1295,81 +1296,58 @@ export const executeStrategy = async (
     });
   }
 
-  // Backtest parity: after any exit on the evaluated closed bar, defer re-entry to the next bar.
-  if (closedAction && state === 'flat' && (signal === 'long' || signal === 'short')) {
+  const sameBarDecision = evaluateSameBarNoReentry({
+    state,
+    signal,
+    closedAction: closedAction || null,
+    lastAction: mergedStrategy.last_action != null ? String(mergedStrategy.last_action) : null,
+    updatedAtMs: mergedStrategy.updated_at
+      ? new Date(String(mergedStrategy.updated_at).replace(' ', 'T') + 'Z').getTime()
+      : null,
+    evaluatedBarTimeMs,
+  });
+
+  if (sameBarDecision.block) {
+    const lastAction = String(mergedStrategy.last_action || '');
     const updated = await updateStrategy(apiKeyName, strategyId, {
       ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
       tp_anchor_ratio: null,
       last_signal: signal,
-      last_action: `${closedAction}_same_bar_no_reentry@${currentRatio}`,
+      last_action: `${sameBarDecision.lastActionSuffix}${currentRatio}`,
       last_error: null,
     });
 
-    logger.info(
-      `Same-bar re-entry blocked for strategy ${strategyId} (${apiKeyName}): `
-      + `exit=${closedAction}, deferred signal=${signal}`
-    );
+    if (closedAction) {
+      logger.info(
+        `Same-bar re-entry blocked for strategy ${strategyId} (${apiKeyName}): `
+        + `exit=${closedAction}, deferred signal=${signal}`
+      );
+      return returnWithProcessedBar({
+        result: closedResult || `Exit on current bar; re-entry deferred to next closed bar`,
+        action: sameBarDecision.action,
+        strategy: updated,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
 
+    logger.info(
+      `Post-exit same-bar re-entry blocked for strategy ${strategyId} (${apiKeyName}): `
+      + `last_action=${lastAction}, bar=${evaluatedBarIso}`
+    );
     return returnWithProcessedBar({
-      result: closedResult || `Exit on current bar; re-entry deferred to next closed bar`,
-      action: `${closedAction}_same_bar_no_reentry`,
+      result: 'Recent exit on current closed bar; re-entry deferred',
+      action: sameBarDecision.action,
       strategy: updated,
       currentRatio,
       donchianHigh,
       donchianLow,
       donchianCenter,
     });
-  }
-
-  // Cross-cycle guard: mixed/resync/desync exits set last_action but not closedAction.
-  // Without this, live can churn entry→exit→re-entry on the same 4h bar (BCH/APE pattern).
-  if (
-    state === 'flat'
-    && !closedAction
-    && (signal === 'long' || signal === 'short')
-  ) {
-    const lastAction = String(mergedStrategy.last_action || '');
-    const exitMarkers = [
-      'desync_closed',
-      'state_resynced',
-      'take_profit_',
-      'stop_loss_',
-      'mean_revert_exit',
-      'macro_shield_exit',
-      'same_bar_no_reentry',
-    ];
-    const recentExit = exitMarkers.some((m) => lastAction.includes(m));
-    if (recentExit && mergedStrategy.updated_at) {
-      const updatedAtMs = new Date(String(mergedStrategy.updated_at).replace(' ', 'T') + 'Z').getTime();
-      if (Number.isFinite(updatedAtMs) && updatedAtMs >= evaluatedBarTimeMs) {
-        const updated = await updateStrategy(apiKeyName, strategyId, {
-          ...executionBindingPatch,
-          state: 'flat',
-          entry_ratio: null,
-          tp_anchor_ratio: null,
-          last_signal: signal,
-          last_action: `post_exit_same_bar_no_reentry@${currentRatio}`,
-          last_error: null,
-        });
-
-        logger.info(
-          `Post-exit same-bar re-entry blocked for strategy ${strategyId} (${apiKeyName}): `
-          + `last_action=${lastAction}, bar=${evaluatedBarIso}`
-        );
-
-        return returnWithProcessedBar({
-          result: 'Recent exit on current closed bar; re-entry deferred',
-          action: 'post_exit_same_bar_no_reentry',
-          strategy: updated,
-          currentRatio,
-          donchianHigh,
-          donchianLow,
-          donchianCenter,
-        });
-      }
-    }
   }
 
   // CT multi-bar re-entry cooldown (CT_REENTRY_MIN_BARS). Default 0 = disabled beyond same-bar guard.

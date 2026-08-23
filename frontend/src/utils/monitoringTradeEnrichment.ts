@@ -62,17 +62,17 @@ export const enrichMonitoringTrades = (rows: MonitoringTradeRow[]): EnrichedMoni
   );
 
   const open = new Map<string, { side: 'long' | 'short'; entryPrice: number; entryTimeMs: number }>();
+  const lastSideByKey = new Map<string, 'long' | 'short'>();
   const enriched: EnrichedMonitoringTradeRow[] = [];
 
   for (const row of sorted) {
     const key = positionKey(row);
-    const cur = open.get(key) || null;
     const dbEntry = row.entryPrice != null && Number.isFinite(Number(row.entryPrice)) && Number(row.entryPrice) > 0
       ? Number(row.entryPrice)
       : null;
 
     if (row.tradeType === 'exit') {
-      const refEntry = dbEntry ?? cur?.entryPrice ?? null;
+      const refEntry = dbEntry ?? open.get(key)?.entryPrice ?? null;
       const pnlPercent = refEntry != null
         ? calcTradePnlPercent(row.side, refEntry, row.price)
         : null;
@@ -83,19 +83,20 @@ export const enrichMonitoringTrades = (rows: MonitoringTradeRow[]): EnrichedMoni
         pnlPercent,
       });
       open.delete(key);
+      lastSideByKey.set(key, row.side);
       continue;
     }
 
-    // entry
     let flowType: MonitoringFlowType = 'in';
-    if (cur && cur.side !== row.side) {
+    const prevSide = open.get(key)?.side ?? lastSideByKey.get(key);
+    if (prevSide && prevSide !== row.side) {
       flowType = 'reverse';
-    } else if (cur && cur.side === row.side) {
+    } else if (open.get(key)?.side === row.side) {
       // Pyramid / duplicate leg — still IN, keep first entry for PnL reference.
       flowType = 'in';
     }
 
-    const entryPrice = row.price > 0 ? row.price : (dbEntry ?? cur?.entryPrice ?? null);
+    const entryPrice = row.price > 0 ? row.price : (dbEntry ?? open.get(key)?.entryPrice ?? null);
     enriched.push({
       ...row,
       flowType,
@@ -108,6 +109,7 @@ export const enrichMonitoringTrades = (rows: MonitoringTradeRow[]): EnrichedMoni
       entryPrice: entryPrice ?? row.price,
       entryTimeMs: Date.parse(String(row.time || '')),
     });
+    lastSideByKey.set(key, row.side);
   }
 
   // Display newest first (matches API order).

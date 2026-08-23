@@ -30,6 +30,10 @@ BeforeAll(async () => {
   state.dbFile = path.join(os.tmpdir(), `btdd-cucumber-${Date.now()}.sqlite`);
   process.env.DB_FILE = state.dbFile;
   process.env.ENABLE_GIT_UPDATE = '0';
+  process.env.PASSWORD_STATE_FILE = path.join(path.dirname(state.dbFile), 'cucumber-auth-password.json');
+
+  const { setDashboardPassword } = await import('../../../src/utils/auth');
+  setDashboardPassword(state.password);
 
   await initDB();
 
@@ -48,8 +52,12 @@ AfterAll(async () => {
   }
 });
 
-Given('dashboard auth password is {string}', (password: string) => {
+Given('dashboard auth password is {string}', async (password: string) => {
   state.password = password;
+  if (password.length >= 12) {
+    const { setDashboardPassword } = await import('../../../src/utils/auth');
+    setDashboardPassword(password);
+  }
 });
 
 Given('git update feature is disabled', () => {

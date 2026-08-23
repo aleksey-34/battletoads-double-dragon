@@ -13429,8 +13429,8 @@ const listTenantSummaries = async (options?: {
             // Follower equity lives on the tenant's own key — never the lead master.
             ? tenant.assigned_api_key_name
             : '',
-      tenant.assigned_api_key_name
-    ).trim();
+      asString(tenant.assigned_api_key_name, ''),
+    );
     // Admin client table: always attach latest snapshot when a key exists.
     // Do not gate on plan capabilities.monitoring — $0 dual plans were showing
     // "no data" while Positions already had ~$900 equity (Aug 2026).
@@ -13742,7 +13742,10 @@ export const getStrategyClientState = async (tenantId: number) => {
       .map((offerId) => findOfferByIdOrNull(constraintsCatalog, offerId))
       .filter((item): item is CatalogOffer => !!item)
     : [];
-  const effectiveMonitoringApiKeyName = asString(profile?.assigned_api_key_name, tenant.assigned_api_key_name).trim();
+  const effectiveMonitoringApiKeyName = asString(
+    profile?.assigned_api_key_name,
+    asString(tenant.assigned_api_key_name, ''),
+  );
   const monitoring = capabilities.monitoring && effectiveMonitoringApiKeyName
     ? await getMonitoringLatest(effectiveMonitoringApiKeyName).catch(() => null)
     : null;
@@ -16969,7 +16972,7 @@ const applyApprovedAlgofundAction = async (params: {
       logger.warn(`Algofund request approve fallback for tenant ${row.tenant_id}: ${reason}`);
       await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
 
-      const note = decisionNote.trim();
+      const note = asString(decisionNote, '');
       const suffix = `Auto-note: approved without materialization (${reason})`;
       decisionNote = note ? `${note} | ${suffix}` : suffix;
     }
