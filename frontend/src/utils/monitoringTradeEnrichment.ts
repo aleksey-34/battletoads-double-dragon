@@ -8,9 +8,119 @@ export type EnrichedMonitoringTradeRow = MonitoringTradeRow & {
   entryPrice: number | null;
 };
 
+export type SynthStrategyMeta = {
+  id: number;
+  baseSymbol: string;
+  quoteSymbol: string;
+};
+
+export type DisplayMonitoringTradeRow = EnrichedMonitoringTradeRow & {
+  synthGrouped?: boolean;
+  synthPairLabel?: string;
+  synthLegs?: EnrichedMonitoringTradeRow[];
+};
+
 export type MonitoringTradeGroupMode = 'none' | 'symbol' | 'flowType' | 'side' | 'pnl';
 
 export type MonitoringPnlBucket = 'profit' | 'loss' | 'pending';
+
+/** Legs of one synth signal usually land within 2 minutes. */
+export const SYNTH_LEG_BUCKET_MS = 120_000;
+
+export const buildSynthStrategyMap = (
+  strategies: Array<Record<string, unknown>>,
+): Map<number, SynthStrategyMeta> => {
+  const out = new Map<number, SynthStrategyMeta>();
+  for (const row of strategies) {
+    const id = Number(row.id);
+    if (!Number.isFinite(id) || id <= 0) continue;
+    if (String(row.market_mode || '') !== 'synthetic') continue;
+    const baseSymbol = String(row.base_symbol || '').toUpperCase();
+    const quoteSymbol = String(row.quote_symbol || '').toUpperCase();
+    if (!baseSymbol || !quoteSymbol) continue;
+    out.set(id, { id, baseSymbol, quoteSymbol });
+  }
+  return out;
+};
+
+const synthBucketKey = (row: EnrichedMonitoringTradeRow): string => {
+  const t = Date.parse(String(row.time || ''));
+  const bucket = Number.isFinite(t) ? Math.floor(t / SYNTH_LEG_BUCKET_MS) : 0;
+  return `${Number(row.strategyId || 0)}::${row.flowType}::${bucket}`;
+};
+
+/** Collapse base+quote fills of the same synth strategy into one list row. */
+export const collapseSynthTradeLegs = (
+  rows: EnrichedMonitoringTradeRow[],
+  synthById: Map<number, SynthStrategyMeta>,
+  enabled: boolean,
+): DisplayMonitoringTradeRow[] => {
+  if (!enabled || synthById.size === 0 || rows.length === 0) {
+    return rows.map((row) => ({ ...row }));
+  }
+
+  const buckets = new Map<string, EnrichedMonitoringTradeRow[]>();
+  const passthrough: DisplayMonitoringTradeRow[] = [];
+
+  for (const row of rows) {
+    const meta = synthById.get(Number(row.strategyId || 0));
+    if (!meta) {
+      passthrough.push({ ...row });
+      continue;
+    }
+    const sym = String(row.symbol || '').toUpperCase();
+    if (sym !== meta.baseSymbol && sym !== meta.quoteSymbol) {
+      passthrough.push({ ...row, synthPairLabel: `${meta.baseSymbol}/${meta.quoteSymbol}` });
+      continue;
+    }
+    const key = synthBucketKey(row);
+    const list = buckets.get(key) || [];
+    list.push(row);
+    buckets.set(key, list);
+  }
+
+  const grouped: DisplayMonitoringTradeRow[] = [];
+  for (const legs of Array.from(buckets.values())) {
+    if (legs.length === 0) continue;
+    const meta = synthById.get(Number(legs[0].strategyId || 0));
+    if (!meta) {
+      grouped.push(...legs.map((row) => ({ ...row })));
+      continue;
+    }
+    const pairLabel = `${meta.baseSymbol}/${meta.quoteSymbol}`;
+    const sortedLegs = [...legs].sort(
+      (a, b) => Date.parse(String(b.time || '')) - Date.parse(String(a.time || '')),
+    );
+    const symbols = new Set(sortedLegs.map((l) => String(l.symbol || '').toUpperCase()));
+    const hasBothLegs = symbols.has(meta.baseSymbol) && symbols.has(meta.quoteSymbol);
+
+    if (hasBothLegs && sortedLegs.length >= 2) {
+      const pnls = sortedLegs
+        .map((l) => l.pnlPercent)
+        .filter((v): v is number => v != null && Number.isFinite(v));
+      const pnlPercent = pnls.length > 0
+        ? pnls.reduce((sum, v) => sum + v, 0) / pnls.length
+        : sortedLegs[0].pnlPercent;
+      grouped.push({
+        ...sortedLegs[0],
+        symbol: pairLabel,
+        synthGrouped: true,
+        synthPairLabel: pairLabel,
+        synthLegs: sortedLegs,
+        pnlPercent,
+      });
+    } else {
+      grouped.push(...sortedLegs.map((row) => ({
+        ...row,
+        synthPairLabel: pairLabel,
+      })));
+    }
+  }
+
+  return [...grouped, ...passthrough].sort(
+    (a, b) => Date.parse(String(b.time || '')) - Date.parse(String(a.time || '')),
+  );
+};
 
 const positionKey = (row: MonitoringTradeRow): string =>
   `${Number(row.strategyId || 0)}::${String(row.symbol || '').toUpperCase()}`;

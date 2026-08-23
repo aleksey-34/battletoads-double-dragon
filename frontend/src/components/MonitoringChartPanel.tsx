@@ -1,11 +1,16 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Checkbox, Collapse, Segmented, Space, Table, Tag, Typography, message } from 'antd';
+import axios from 'axios';
 import ChartComponent from './ChartComponent';
 import MonitoringSymbolChartModal from './MonitoringSymbolChartModal';
 import {
+  DisplayMonitoringTradeRow,
   EnrichedMonitoringTradeRow,
   MonitoringTradeGroupMode,
+  buildSynthStrategyMap,
+  collapseSynthTradeLegs,
   enrichMonitoringTrades,
+  SynthStrategyMeta,
   flowTypeLabel,
   groupMonitoringTrades,
   pnlBucketLabel,
@@ -200,18 +205,60 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   const [showFreq, setShowFreq] = useState(false);
   const [equityAsReturn, setEquityAsReturn] = useState(true);
   const [tradeGroupMode, setTradeGroupMode] = useState<MonitoringTradeGroupMode>('none');
+  const [groupSynthLegs, setGroupSynthLegs] = useState(true);
+  const [synthById, setSynthById] = useState(() => new Map<number, SynthStrategyMeta>());
   const [chartSymbol, setChartSymbol] = useState<string | null>(null);
+  const [chartStrategyId, setChartStrategyId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!apiKeyName) {
+      setSynthById(new Map());
+      return;
+    }
+    let cancelled = false;
+    void axios.get<unknown[]>(`/api/strategies/${encodeURIComponent(apiKeyName)}`, { timeout: 30_000 })
+      .then((res) => {
+        if (cancelled) return;
+        const rows = Array.isArray(res.data) ? res.data : [];
+        const map = buildSynthStrategyMap(rows as Array<Record<string, unknown>>);
+        setSynthById(map);
+        if (map.size > 0) {
+          setGroupSynthLegs(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSynthById(new Map());
+      });
+    return () => { cancelled = true; };
+  }, [apiKeyName]);
 
   const enrichedTrades = useMemo(() => enrichMonitoringTrades(trades), [trades]);
+  const displayTrades = useMemo(
+    () => collapseSynthTradeLegs(enrichedTrades, synthById, groupSynthLegs),
+    [enrichedTrades, groupSynthLegs, synthById],
+  );
   const tradeGroups = useMemo(
-    () => groupMonitoringTrades(enrichedTrades, tradeGroupMode),
-    [enrichedTrades, tradeGroupMode],
+    () => groupMonitoringTrades(displayTrades, tradeGroupMode),
+    [displayTrades, tradeGroupMode],
   );
 
   const chartSymbolTrades = useMemo(() => {
-    if (!chartSymbol) return [];
+    if (!chartSymbol && !chartStrategyId) return [];
+    if (chartStrategyId) {
+      return enrichedTrades.filter((t) => Number(t.strategyId || 0) === chartStrategyId);
+    }
     return enrichedTrades.filter((t) => String(t.symbol).toUpperCase() === chartSymbol);
-  }, [chartSymbol, enrichedTrades]);
+  }, [chartStrategyId, chartSymbol, enrichedTrades]);
+
+  const openTradeChart = (row: DisplayMonitoringTradeRow) => {
+    if (row.synthGrouped && row.synthPairLabel) {
+      setChartSymbol(row.synthPairLabel);
+      setChartStrategyId(Number(row.strategyId || 0) || null);
+      return;
+    }
+    setChartStrategyId(null);
+    setChartSymbol(String(row.symbol || '').toUpperCase());
+  };
 
   const freqPoints = useMemo(() => {
     const fromApi = (Array.isArray(tradeFrequency) ? tradeFrequency : [])
@@ -436,9 +483,17 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     {
       title: 'Символ',
       dataIndex: 'symbol',
-      width: 96,
-      sorter: (a: EnrichedMonitoringTradeRow, b: EnrichedMonitoringTradeRow) =>
+      width: 130,
+      sorter: (a: DisplayMonitoringTradeRow, b: DisplayMonitoringTradeRow) =>
         String(a.symbol).localeCompare(String(b.symbol)),
+      render: (_: string, row: DisplayMonitoringTradeRow) => (
+        <Space size={4} wrap>
+          <span>{row.symbol}</span>
+          {row.synthGrouped || row.synthPairLabel ? (
+            <Tag color="purple" style={{ margin: 0, fontSize: 10 }}>synth</Tag>
+          ) : null}
+        </Space>
+      ),
     },
     {
       title: 'PnL %',
@@ -468,12 +523,12 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
       title: '',
       key: 'chart',
       width: 88,
-      render: (_: unknown, row: EnrichedMonitoringTradeRow) => (
+      render: (_: unknown, row: DisplayMonitoringTradeRow) => (
         apiKeyName ? (
           <Button
             size="small"
             type="link"
-            onClick={() => setChartSymbol(String(row.symbol || '').toUpperCase())}
+            onClick={() => openTradeChart(row)}
           >
             График
           </Button>
@@ -482,14 +537,35 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     },
   ];
 
-  const renderTradesTable = (data: EnrichedMonitoringTradeRow[], keyPrefix = '') => (
+  const renderTradesTable = (data: DisplayMonitoringTradeRow[], keyPrefix = '') => (
     <Table
       size="small"
-      rowKey={(row) => `${keyPrefix}${row.id}-${row.time}`}
+      rowKey={(row) => `${keyPrefix}${row.id}-${row.time}-${row.synthGrouped ? 'g' : 's'}`}
       pagination={{ pageSize: 10, size: 'small' }}
       dataSource={data}
       columns={tradeColumns}
-      scroll={{ x: 560 }}
+      scroll={{ x: 600 }}
+      expandable={{
+        rowExpandable: (row) => Boolean(row.synthGrouped && (row.synthLegs?.length || 0) > 1),
+        expandedRowRender: (row) => (
+          <Table
+            size="small"
+            pagination={false}
+            rowKey={(leg) => `leg-${leg.id}-${leg.time}`}
+            dataSource={row.synthLegs || []}
+            columns={[
+              { title: 'Время', dataIndex: 'time', render: (v: string) => new Date(v).toLocaleString('ru-RU') },
+              { title: 'Нога', dataIndex: 'symbol' },
+              { title: 'Сторона', dataIndex: 'side' },
+              {
+                title: 'PnL %',
+                dataIndex: 'pnlPercent',
+                render: (v: number | null) => (v != null ? fmtSignedPct(v) : '—'),
+              },
+            ]}
+          />
+        ),
+      }}
     />
   );
 
@@ -679,33 +755,48 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
         </div>
       )}
 
-      {enrichedTrades.length > 0 ? (
+      {displayTrades.length > 0 ? (
         <div>
           <Space wrap style={{ justifyContent: 'space-between', width: '100%', marginBottom: 8 }}>
             <Typography.Text strong>
-              Сделки за период ({enrichedTrades.length}
+              Сделки за период ({displayTrades.length}
+              {groupSynthLegs && displayTrades.length !== enrichedTrades.length
+                ? ` · ${enrichedTrades.length} fills`
+                : ''}
               {trades.length >= 200 ? ', показаны последние 200' : ''}
               )
             </Typography.Text>
-            <Segmented
-              size="small"
-              value={tradeGroupMode}
-              onChange={(v) => setTradeGroupMode(v as MonitoringTradeGroupMode)}
-              options={[
-                { label: 'Список', value: 'none' },
-                { label: 'Символ', value: 'symbol' },
-                { label: 'Тип', value: 'flowType' },
-                { label: 'Сторона', value: 'side' },
-                { label: 'PnL', value: 'pnl' },
-              ]}
-            />
+            <Space wrap>
+              {synthById.size > 0 ? (
+                <Checkbox
+                  checked={groupSynthLegs}
+                  onChange={(e) => setGroupSynthLegs(e.target.checked)}
+                >
+                  Группировать synth-ноги
+                </Checkbox>
+              ) : null}
+              <Segmented
+                size="small"
+                value={tradeGroupMode}
+                onChange={(v) => setTradeGroupMode(v as MonitoringTradeGroupMode)}
+                options={[
+                  { label: 'Список', value: 'none' },
+                  { label: 'Символ', value: 'symbol' },
+                  { label: 'Тип', value: 'flowType' },
+                  { label: 'Сторона', value: 'side' },
+                  { label: 'PnL', value: 'pnl' },
+                ]}
+              />
+            </Space>
           </Space>
           <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
-            IN — вход · OUT — выход · REV — переворот (long→short или short→long на той же паре).
-            PnL% считается на OUT по цене входа.
+            IN — вход · OUT — выход · REV — переворот.
+            {synthById.size > 0
+              ? ' Synth: BCH+APE (и др. пары) в одной строке · раскрой строку для ног.'
+              : ' PnL% на OUT по цене входа.'}
           </Typography.Text>
           {tradeGroupMode === 'none' || !tradeGroups ? (
-            renderTradesTable(enrichedTrades)
+            renderTradesTable(displayTrades)
           ) : (
             <Collapse
               size="small"
@@ -726,6 +817,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
                         type="link"
                         onClick={(e) => {
                           e.stopPropagation();
+                          setChartStrategyId(null);
                           setChartSymbol(group.key);
                         }}
                       >
@@ -742,11 +834,14 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
       ) : null}
 
       <MonitoringSymbolChartModal
-        open={!!chartSymbol && !!apiKeyName}
+        open={!!(chartSymbol || chartStrategyId) && !!apiKeyName}
         apiKeyName={apiKeyName}
         symbol={chartSymbol || ''}
         trades={chartSymbolTrades}
-        onClose={() => setChartSymbol(null)}
+        onClose={() => {
+          setChartSymbol(null);
+          setChartStrategyId(null);
+        }}
       />
     </Space>
   );

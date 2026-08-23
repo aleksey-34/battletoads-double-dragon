@@ -98,7 +98,7 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
   }, [apiKeyName]);
 
   useEffect(() => {
-    if (!open || !apiKeyName || !symbol) {
+    if (!open || !apiKeyName || (!symbol && !primaryStrategyId)) {
       return;
     }
     let cancelled = false;
@@ -141,7 +141,7 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
           payload = Array.isArray(synthRes.data) ? synthRes.data : [];
         } else {
           const monoRes = await axios.get(`/api/market-data/${encodeURIComponent(apiKeyName)}`, {
-            params: { symbol, interval, limit: 320 },
+            params: { symbol: symbol.split('/')[0] || symbol, interval, limit: 320 },
             timeout: 55_000,
           });
           payload = Array.isArray(monoRes.data) ? monoRes.data : [];
@@ -162,13 +162,24 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
     return () => { cancelled = true; };
   }, [open, apiKeyName, symbol, primaryStrategyId]);
 
+  const markerSymbols = useMemo(() => {
+    if (strategyMeta?.market_mode === 'synthetic') {
+      return [strategyMeta.base_symbol, strategyMeta.quote_symbol].filter(Boolean);
+    }
+    return symbol ? [symbol] : [];
+  }, [strategyMeta, symbol]);
+
   const markers = useMemo(
     () => buildStrategyTradeMarkersFromEvents(
       toStrategyEvents(trades),
-      [symbol],
-      { chartData, markerLimit: 400 },
+      markerSymbols,
+      {
+        chartData,
+        markerLimit: 400,
+        strategyId: primaryStrategyId > 0 ? primaryStrategyId : undefined,
+      },
     ),
-    [chartData, symbol, trades],
+    [chartData, markerSymbols, primaryStrategyId, trades],
   );
 
   const flowHint = useMemo(() => {
