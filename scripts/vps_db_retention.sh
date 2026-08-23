@@ -64,11 +64,15 @@ if [[ "$DRY" -eq 1 ]]; then
 fi
 
 log "Stopping btdd services..."
+touch /var/tmp/btdd-maintenance.lock
+trap 'rm -f /var/tmp/btdd-maintenance.lock' EXIT
 stop_services
 sleep 2
 
 log "Applying retention..."
 "${PY_ARGS[@]}"
+
+rm -f /var/tmp/btdd-maintenance.lock
 
 log "Starting services..."
 start_services

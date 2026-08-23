@@ -5,6 +5,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/battletoads-double-dragon}"
 API_PORT="${API_PORT:-3001}"
+MAINTENANCE_FLAG="${BTDD_MAINTENANCE_FLAG:-/var/tmp/btdd-maintenance.lock}"
 TG_TOKEN="${BTDD_WATCHDOG_TG_TOKEN:-${TELEGRAM_ADMIN_BOT_TOKEN:-}}"
 TG_CHAT="${BTDD_WATCHDOG_TG_CHAT:-${TELEGRAM_ADMIN_CHAT_ID:-}}"
 # 45m was too aggressive: with ~20 WEEX keys monitoring takes >5m per cycle;
@@ -14,6 +15,11 @@ RESTART_ON_STALE="${BTDD_WATCHDOG_RESTART_ON_STALE:-0}"
 LOG_TAG="[btdd-watchdog]"
 
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $LOG_TAG $*"; }
+
+if [[ -f "$MAINTENANCE_FLAG" ]]; then
+  log "skip — maintenance flag present ($MAINTENANCE_FLAG)"
+  exit 0
+fi
 
 NOTIFY_COOLDOWN_SEC="${BTDD_WATCHDOG_NOTIFY_COOLDOWN_SEC:-3600}"
 STATE_FILE="${BTDD_WATCHDOG_STATE_FILE:-/var/tmp/btdd-watchdog-last-alert}"
@@ -73,12 +79,14 @@ if ! health_ok; then
 fi
 
 if [[ -f "${APP_DIR}/backend/database.db" ]]; then
+  MON_DB="${APP_DIR}/backend/monitoring.db"
   stale=$(sqlite3 "${APP_DIR}/backend/database.db" "
+    ATTACH '${MON_DB//\'/\'\'}' AS mon;
     SELECT COUNT(*) FROM algofund_profiles ap
     JOIN tenants t ON t.id=ap.tenant_id
     LEFT JOIN api_keys a ON a.name=COALESCE(NULLIF(ap.execution_api_key_name,''), t.assigned_api_key_name)
     LEFT JOIN (
-      SELECT api_key_id, MAX(datetime(recorded_at)) mx FROM monitoring_snapshots GROUP BY api_key_id
+      SELECT api_key_id, MAX(datetime(recorded_at)) mx FROM mon.monitoring_snapshots GROUP BY api_key_id
     ) ls ON ls.api_key_id=a.id
     WHERE ap.actual_enabled=1 AND ap.published_system_name!=''
       AND (ls.mx IS NULL OR (julianday('now')-julianday(ls.mx))*1440 > ${STALE_MIN});
