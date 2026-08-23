@@ -16,7 +16,7 @@ import json, urllib.request, os
 api = os.environ.get("BTDD_API_URL", "http://127.0.0.1:3001/api").rstrip("/")
 token = os.environ.get("BTDD_ADMIN_TOKEN", "defaultpassword")
 req = urllib.request.Request(
-    f"{api}/saas/portfolios",
+    f"{api}/saas/algofund/portfolios",
     headers={"Authorization": f"Bearer {token}"},
 )
 with urllib.request.urlopen(req, timeout=30) as r:

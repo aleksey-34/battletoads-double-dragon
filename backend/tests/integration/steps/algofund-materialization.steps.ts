@@ -218,14 +218,14 @@ When('I query materialization DB source for key {string} system {string}', async
   const cardCode = `CARD::${systemName.toUpperCase()}`;
   const card = await db.get<{ id: number }>('SELECT id FROM master_cards WHERE code = ? AND is_active = 1', [cardCode]).catch(() => null);
   if (card?.id) {
-    masterCardMembers = await db.all<DbMember>(
+    masterCardMembers = (await db.all<DbMember>(
       `SELECT mcm.strategy_id, mcm.weight, s.name AS strategy_name,
               s.strategy_type, s.market_mode, s.base_symbol
        FROM master_card_members mcm
        JOIN strategies s ON s.id = mcm.strategy_id
        WHERE mcm.card_id = ? AND mcm.is_enabled = 1`,
       [card.id]
-    ).catch(() => [] as DbMember[]);
+    ).catch(() => [] as DbMember[])) as DbMember[];
   }
 
   // --- Replicate Priority 2 from materializeAlgofundSystem ---
@@ -238,14 +238,14 @@ When('I query materialization DB source for key {string} system {string}', async
       [systemName, keyName]
     ).catch(() => null);
     if (sourceTs?.id) {
-      dbSourceMembers = await db.all<DbMember>(
+      dbSourceMembers = (await db.all<DbMember>(
         `SELECT tsm.strategy_id, tsm.weight, s.name AS strategy_name,
                 s.strategy_type, s.market_mode, s.base_symbol
          FROM trading_system_members tsm
          JOIN strategies s ON s.id = tsm.strategy_id
          WHERE tsm.system_id = ? AND tsm.is_enabled = 1`,
         [sourceTs.id]
-      ).catch(() => [] as DbMember[]);
+      ).catch(() => [] as DbMember[])) as DbMember[];
     }
   }
 });
