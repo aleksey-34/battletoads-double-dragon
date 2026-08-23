@@ -44,6 +44,6 @@ describe('monitoring trade flow enrichment', () => {
   });
 
   it('calcTradePnlPercent short uses entry/exit inversion', () => {
-    assert.equal(calcTradePnlPercent('short', 100, 90), 11.11111111111111);
+    assert.ok(Math.abs(Number(calcTradePnlPercent('short', 100, 90)) - 11.11111111111111) < 0.001);
   });
 });

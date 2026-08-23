@@ -35,17 +35,31 @@ describe('resolveBacktestRangeIndices', () => {
     }
   });
 
-  it('skips when insufficient history before range start', () => {
+  it('allows firstInRangeIndex=0 when enough total candles for effectiveLength', () => {
     const res = resolveBacktestRangeIndices({
-      effectiveLength: 33,
+      effectiveLength: 120,
+      warmupBars: 120,
+      firstInRangeIndex: 0,
+      lastInRangeIndex: 500,
+      candlesLength: 4000,
+    });
+    assert.equal(res.ok, true);
+    if (res.ok) {
+      assert.equal(res.startIndex, 120);
+    }
+  });
+
+  it('skips when insufficient total candle history for effectiveLength', () => {
+    const res = resolveBacktestRangeIndices({
+      effectiveLength: 120,
       warmupBars: 120,
       firstInRangeIndex: 80,
       lastInRangeIndex: 200,
-      candlesLength: 500,
+      candlesLength: 100,
     });
     assert.equal(res.ok, false);
     if (!res.ok) {
-      assert.match(res.reason, /Insufficient warmup history/);
+      assert.match(res.reason, /Insufficient candle history/);
     }
   });
 

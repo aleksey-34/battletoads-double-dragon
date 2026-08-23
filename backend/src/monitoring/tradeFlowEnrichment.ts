@@ -44,17 +44,17 @@ export const enrichMonitoringTrades = (rows: MonitoringTradeInput[]): EnrichedMo
   );
 
   const open = new Map<string, { side: 'long' | 'short'; entryPrice: number }>();
+  const lastSideByKey = new Map<string, 'long' | 'short'>();
   const enriched: EnrichedMonitoringTrade[] = [];
 
   for (const row of sorted) {
     const key = positionKey(row);
-    const cur = open.get(key) || null;
     const dbEntry = row.entryPrice != null && Number.isFinite(Number(row.entryPrice)) && Number(row.entryPrice) > 0
       ? Number(row.entryPrice)
       : null;
 
     if (row.tradeType === 'exit') {
-      const refEntry = dbEntry ?? cur?.entryPrice ?? null;
+      const refEntry = dbEntry ?? open.get(key)?.entryPrice ?? null;
       enriched.push({
         ...row,
         flowType: 'out',
@@ -62,15 +62,17 @@ export const enrichMonitoringTrades = (rows: MonitoringTradeInput[]): EnrichedMo
         pnlPercent: refEntry != null ? calcTradePnlPercent(row.side, refEntry, row.price) : null,
       });
       open.delete(key);
+      lastSideByKey.set(key, row.side);
       continue;
     }
 
     let flowType: MonitoringFlowType = 'in';
-    if (cur && cur.side !== row.side) {
+    const prevSide = open.get(key)?.side ?? lastSideByKey.get(key);
+    if (prevSide && prevSide !== row.side) {
       flowType = 'reverse';
     }
 
-    const entryPrice = row.price > 0 ? row.price : (dbEntry ?? cur?.entryPrice ?? null);
+    const entryPrice = row.price > 0 ? row.price : (dbEntry ?? open.get(key)?.entryPrice ?? null);
     enriched.push({
       ...row,
       flowType,
@@ -82,6 +84,7 @@ export const enrichMonitoringTrades = (rows: MonitoringTradeInput[]): EnrichedMo
       side: row.side,
       entryPrice: entryPrice ?? row.price,
     });
+    lastSideByKey.set(key, row.side);
   }
 
   return enriched.sort(

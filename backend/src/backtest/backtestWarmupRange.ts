@@ -11,23 +11,25 @@ export const resolveBacktestRangeIndices = (input: {
   candlesLength: number;
 }): BacktestRangeResolution => {
   const effectiveLength = Math.max(0, Math.floor(input.effectiveLength));
-  const warmupBars = Math.max(0, Math.floor(input.warmupBars));
   const firstInRangeIndex = Math.max(0, Math.floor(input.firstInRangeIndex));
+  const candlesLength = Math.max(0, Math.floor(input.candlesLength));
   const lastInRangeIndex = Math.min(
-    Math.max(0, Math.floor(input.candlesLength) - 1),
+    Math.max(0, candlesLength - 1),
     Math.floor(input.lastInRangeIndex),
   );
 
-  const minHistoryBars = Math.max(effectiveLength, warmupBars);
-  if (firstInRangeIndex < minHistoryBars) {
-    return {
-      ok: false,
-      reason: `Insufficient warmup history before range start (index ${firstInRangeIndex}, need ${minHistoryBars})`,
-    };
-  }
-
+  // Warmup bars are fetched before dateFrom (see engine fetchStartMs). Do NOT add
+  // warmupBars on top of firstInRangeIndex — that wrongly skips short sinceFix
+  // windows. Only require enough bars for indicator effectiveLength.
   const startIndex = Math.max(effectiveLength, firstInRangeIndex);
   const endIndex = lastInRangeIndex;
+
+  if (startIndex >= candlesLength) {
+    return {
+      ok: false,
+      reason: `Insufficient candle history (need ${startIndex} bars, have ${candlesLength})`,
+    };
+  }
 
   if (endIndex <= startIndex) {
     return { ok: false, reason: 'No executable candles in selected date range' };
