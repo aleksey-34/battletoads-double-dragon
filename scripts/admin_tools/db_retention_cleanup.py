@@ -175,12 +175,49 @@ def main() -> int:
 
     keep_full_json.update(latest_single_by_sid.values())
 
-    # Any run touching protected strategy (portfolio / TS full sweeps)
+    # Latest portfolio / multi-leg runs per api key (full sweeps — keep newest few only)
+    portfolio_by_key: dict[str, list[int]] = {}
     for row in runs:
         rid = int(row["id"])
         sids = parse_strategy_ids_json(row["strategy_ids"])
-        if sids & protected_sids:
+        if len(sids) < 2:
+            continue
+        key = str(row["api_key_name"] or "")
+        portfolio_by_key.setdefault(key, []).append(rid)
+    for _key, ids in portfolio_by_key.items():
+        for rid in sorted(ids, reverse=True)[:3]:
             keep_full_json.add(rid)
+
+    # Active card member sets: keep best matching multi-strategy run per card (if any)
+    card_rows = conn.execute(
+        """
+        SELECT mc.id, GROUP_CONCAT(mcm.strategy_id) AS sids
+        FROM master_cards mc
+        JOIN master_card_members mcm ON mcm.card_id = mc.id
+        WHERE COALESCE(mc.is_active, 0) = 1
+        GROUP BY mc.id
+        """
+    ).fetchall()
+    for card in card_rows:
+        try:
+            member_sids = {int(x) for x in str(card["sids"] or "").split(",") if x.strip()}
+        except ValueError:
+            continue
+        if len(member_sids) < 2:
+            continue
+        best_rid = None
+        best_overlap = 0
+        for row in runs:
+            rid = int(row["id"])
+            sids = parse_strategy_ids_json(row["strategy_ids"])
+            if len(sids) < 2:
+                continue
+            overlap = len(sids & member_sids)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_rid = rid
+        if best_rid is not None and best_overlap >= max(2, len(member_sids) // 4):
+            keep_full_json.add(best_rid)
 
     # Recent runs per active api key (UI / btRtSweep headroom)
     active_keys = {
