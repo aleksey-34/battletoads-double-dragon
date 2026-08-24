@@ -1001,7 +1001,7 @@ const Positions: React.FC = () => {
     () => String(apiKeys.find((key) => key.name === monChartKey)?.exchange || '').toLowerCase(),
     [apiKeys, monChartKey],
   );
-  const monChartBackfillSupported = monChartExchange.includes('bybit');
+  const monChartBackfillSupported = /bybit|bingx|weex|mexc|mxc/.test(monChartExchange);
 
   const handleBackfillFromExchange = async () => {
     if (!monChartKey) return;

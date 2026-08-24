@@ -3189,11 +3189,11 @@ const ClientCabinet: React.FC = () => {
           currencyLabel="USD"
           onBackfillFromExchange={handleBackfillFromExchange}
           backfillLoading={actionLoading === 'monitoring-backfill'}
-          backfillSupported={String(
+          backfillSupported={/bybit|bingx|weex|mexc|mxc/.test(String(
             monitoringKeyOptions.find((k) => k.name === monitoringApiKeyName)?.exchange
             || clientApiKeys.find((k) => k.name === monitoringApiKeyName)?.exchange
             || '',
-          ).toLowerCase().includes('bybit')}
+          ).toLowerCase())}
         />
       </Modal>
 

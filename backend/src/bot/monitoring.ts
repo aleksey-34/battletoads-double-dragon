@@ -959,10 +959,31 @@ const insertInferredFillEvents = async (
   return inserted;
 };
 
+const backfillNoteForExchange = (
+  exchange: string,
+  inserted: number,
+  fillsInserted: number,
+): string => {
+  const ex = String(exchange || '').toLowerCase();
+  const sourceNote =
+    ex.includes('weex')
+      ? 'WEEX: account income (balance) + userTrades → entry/exit.'
+      : ex.includes('bingx')
+        ? 'BingX: income walk-back (approx wallet, без UPNL) + allFillOrders (fanout).'
+        : ex.includes('mexc')
+          ? 'MEXC: asset analysis / fill-reconstruct equity + history_deals/order_deals fills.'
+          : 'Bybit: Transaction Log (wallet equity, без UPNL) + Execution List (fills → entry/exit).';
+  return [
+    sourceNote,
+    inserted > 0 ? `Equity +${inserted}` : 'Equity: новых точек нет',
+    fillsInserted > 0 ? `Fills +${fillsInserted}` : 'Fills: пусто или уже были',
+  ].join(' ');
+};
+
 /**
  * On-demand: pull equity + fills history from the exchange.
  * Equity → monitoring_snapshots (before first live). Fills → exchange_fill_events (account-level).
- * Bybit only for now.
+ * Supported: Bybit, BingX, WEEX, MEXC.
  */
 export const backfillMonitoringEquityFromExchange = async (
   apiKeyName: string,
@@ -983,8 +1004,17 @@ export const backfillMonitoringEquityFromExchange = async (
     await ensureExchangeFillEventsTable();
     const key = await getApiKeyRow(keyName);
     const exchangeLower = String(key.exchange || '').toLowerCase();
-    if (!exchangeLower.includes('bybit')) {
-      throw new Error(`Backfill with exchange history is currently supported only for Bybit (got: ${key.exchange || 'unknown'})`);
+    const supported = (
+      exchangeLower.includes('bybit')
+      || exchangeLower.includes('bingx')
+      || exchangeLower.includes('weex')
+      || exchangeLower.includes('mexc')
+      || exchangeLower.includes('mxc')
+    );
+    if (!supported) {
+      throw new Error(
+        `Backfill with exchange history is supported for Bybit/BingX/WEEX/MEXC (got: ${key.exchange || 'unknown'})`,
+      );
     }
 
     const rangeOpts = {
@@ -994,11 +1024,20 @@ export const backfillMonitoringEquityFromExchange = async (
     };
 
     const [history, fillsHistory] = await Promise.all([
-      fetchExchangeEquityHistory(keyName, rangeOpts),
+      fetchExchangeEquityHistory(keyName, rangeOpts).catch((error) => {
+        logger.warn(`fetchExchangeEquityHistory failed for ${keyName}: ${(error as Error).message}`);
+        return {
+          exchange: exchangeLower || 'unknown',
+          points: [] as Awaited<ReturnType<typeof fetchExchangeEquityHistory>>['points'],
+          rawEvents: 0,
+          fromMs: 0,
+          toMs: 0,
+        };
+      }),
       fetchExchangeFillsHistory(keyName, rangeOpts).catch((error) => {
         logger.warn(`fetchExchangeFillsHistory failed for ${keyName}: ${(error as Error).message}`);
         return {
-          exchange: 'bybit',
+          exchange: exchangeLower || 'unknown',
           fills: [] as Awaited<ReturnType<typeof fetchExchangeFillsHistory>>['fills'],
           rawEvents: 0,
           fromMs: 0,
@@ -1094,26 +1133,20 @@ export const backfillMonitoringEquityFromExchange = async (
       `backfillMonitoringEquityFromExchange ${keyName}: equity=${inserted} fills=${fillsInserted} rawTx=${history.rawEvents} rawFills=${fillsHistory.rawEvents}`,
     );
 
-    const noteParts = [
-      'Bybit: Transaction Log (wallet equity, без UPNL) + Execution List (fills → entry/exit).',
-      inserted > 0 ? `Equity +${inserted}` : 'Equity: новых точек нет',
-      fillsInserted > 0 ? `Fills +${fillsInserted}` : 'Fills: пусто или уже были',
-    ];
-
     return {
       apiKeyName: keyName,
-      exchange: history.exchange,
+      exchange: history.exchange || fillsHistory.exchange || key.exchange || 'unknown',
       inserted,
       skipped: history.points.length - usable.length,
       rawEvents: history.rawEvents,
       pointsFromExchange: history.points.length,
       fillsInserted,
       fillsRawEvents: fillsHistory.rawEvents,
-      fromMs: history.fromMs,
-      toMs: history.toMs,
+      fromMs: history.fromMs || fillsHistory.fromMs,
+      toMs: history.toMs || fillsHistory.toMs,
       firstAt,
       lastAt,
-      note: noteParts.join(' '),
+      note: backfillNoteForExchange(history.exchange || key.exchange || '', inserted, fillsInserted),
     };
   })();
 

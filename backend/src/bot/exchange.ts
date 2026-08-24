@@ -3364,33 +3364,26 @@ export type ExchangeEquityHistoryPoint = {
   equityUsd: number;
 };
 
+export type ExchangeHistoryRangeOptions = {
+  fromMs?: number;
+  toMs?: number;
+  maxDays?: number;
+};
+
 const STABLE_COINS = new Set(['USDT', 'USDC', 'USD']);
 /** Bybit transaction-log window is max 7 days per request. */
 const BYBIT_TX_LOG_WINDOW_MS = 7 * 86_400_000;
 const BYBIT_TX_LOG_PAGE_LIMIT = 50;
 const BYBIT_TX_LOG_MAX_PAGES = 250;
+const WEEX_INCOME_WINDOW_MS = 100 * 86_400_000;
+const WEEX_FILLS_WINDOW_MS = 7 * 86_400_000;
+const BINGX_INCOME_WINDOW_MS = 7 * 86_400_000;
+const BINGX_FILLS_WINDOW_MS = 30 * 86_400_000;
+const BACKFILL_SYMBOL_FANOUT_CAP = 24;
 
-/**
- * On-demand equity series from the exchange (Bybit first).
- * Uses Unified Account transaction log `cashBalance` (wallet after each event).
- * Does NOT include open UPNL — historical mark equity is not available from this endpoint.
- */
-export const fetchExchangeEquityHistory = async (
-  apiKeyName: string,
-  options?: { fromMs?: number; toMs?: number; maxDays?: number },
-): Promise<{
-  exchange: string;
-  points: ExchangeEquityHistoryPoint[];
-  rawEvents: number;
-  fromMs: number;
-  toMs: number;
-}> => {
-  await ensureExchangeClientInitialized(apiKeyName);
-
-  if (!clients[apiKeyName]?.client) {
-    throw new Error(`Exchange equity history is currently supported only for Bybit (key: ${apiKeyName})`);
-  }
-
+const resolveHistoryRange = (
+  options?: ExchangeHistoryRangeOptions,
+): { fromMs: number; toMs: number; maxDays: number } => {
   const nowMs = Date.now();
   const maxDays = Math.min(180, Math.max(1, Math.floor(Number(options?.maxDays) || 90)));
   const toMs = Math.min(nowMs, Number.isFinite(Number(options?.toMs)) ? Math.floor(Number(options?.toMs)) : nowMs);
@@ -3402,7 +3395,148 @@ export const fetchExchangeEquityHistory = async (
   if (toMs <= fromMs) {
     throw new Error('Invalid equity history range');
   }
+  return { fromMs, toMs, maxDays };
+};
 
+const downsampleEquityPoints = (rawPoints: ExchangeEquityHistoryPoint[]): ExchangeEquityHistoryPoint[] => {
+  const bucketMs = 15 * 60_000;
+  const byBucket = new Map<number, ExchangeEquityHistoryPoint>();
+  for (const point of rawPoints) {
+    if (!(point.timeMs > 0) || !(point.equityUsd > 0)) continue;
+    const bucket = Math.floor(point.timeMs / bucketMs) * bucketMs;
+    byBucket.set(bucket, { timeMs: point.timeMs, equityUsd: point.equityUsd });
+  }
+  return Array.from(byBucket.values()).sort((a, b) => a.timeMs - b.timeMs);
+};
+
+const detectExchangeForKey = async (apiKeyName: string): Promise<'bybit' | 'bitget' | 'bingx' | 'binance' | 'mexc' | 'weex'> => {
+  await ensureExchangeClientInitialized(apiKeyName);
+  const row = await db.get('SELECT exchange FROM api_keys WHERE name = ?', [apiKeyName]) as { exchange?: string } | undefined;
+  return detectExchange(String(row?.exchange || ''));
+};
+
+const getWeexRestForKey = async (apiKeyName: string) => {
+  const row = await db.get('SELECT * FROM api_keys WHERE name = ?', [apiKeyName]);
+  if (!row) throw new Error(`API key not found: ${apiKeyName}`);
+  return createWeexClient(row as ApiKey);
+};
+
+/** Symbols bound to the key (strategies + open positions + recent fills) for fanout exchanges. */
+const resolveBackfillSymbols = async (apiKeyName: string, cap = BACKFILL_SYMBOL_FANOUT_CAP): Promise<string[]> => {
+  const symbolRows = await db.all(
+    `SELECT DISTINCT
+       UPPER(TRIM(COALESCE(base_symbol, ''))) AS base_symbol,
+       UPPER(TRIM(COALESCE(quote_symbol, ''))) AS quote_symbol
+     FROM strategies s
+     JOIN api_keys a ON a.id = s.api_key_id
+     WHERE a.name = ?
+       AND (
+         TRIM(COALESCE(base_symbol, '')) <> ''
+         OR TRIM(COALESCE(quote_symbol, '')) <> ''
+       )`,
+    [apiKeyName],
+  ) as Array<{ base_symbol?: string; quote_symbol?: string }>;
+
+  const recentEventSymbolRows = await db.all(
+    `SELECT DISTINCT UPPER(TRIM(COALESCE(s.base_symbol, ''))) AS base_symbol
+     FROM live_trade_events lte
+     JOIN strategies s ON s.id = lte.strategy_id
+     JOIN api_keys a ON a.id = s.api_key_id
+     WHERE a.name = ?
+       AND lte.actual_time >= (strftime('%s', 'now', '-90 days') * 1000)
+       AND TRIM(COALESCE(s.base_symbol, '')) <> ''`,
+    [apiKeyName],
+  ) as Array<{ base_symbol?: string }>;
+
+  const positionRows = await getPositions(apiKeyName).catch(() => []);
+
+  const symbols = Array.from(new Set([
+    ...(Array.isArray(symbolRows) ? symbolRows : []).flatMap((row) => [
+      String(row?.base_symbol || '').trim().toUpperCase(),
+      String(row?.quote_symbol || '').trim().toUpperCase(),
+    ]),
+    ...(Array.isArray(positionRows) ? positionRows : []).map((row: any) => String(row?.symbol || '').trim().toUpperCase()),
+    ...(Array.isArray(recentEventSymbolRows) ? recentEventSymbolRows : []).map((row) => String(row?.base_symbol || '').trim().toUpperCase()),
+  ].filter(Boolean).map((s) => toUiSymbol(s)).filter(Boolean)));
+
+  return symbols.slice(0, Math.max(1, cap));
+};
+
+const sumStableWalletUsd = async (apiKeyName: string): Promise<number> => {
+  const balances = await getBalances(apiKeyName).catch(() => []);
+  let total = 0;
+  for (const row of Array.isArray(balances) ? balances : []) {
+    const coin = String((row as any)?.coin || '').toUpperCase();
+    if (!STABLE_COINS.has(coin)) continue;
+    const wallet = Number((row as any)?.walletBalance ?? (row as any)?.usdValue ?? 0);
+    if (Number.isFinite(wallet) && wallet > 0) total += wallet;
+  }
+  return total;
+};
+
+const normalizeCcxtFill = (trade: any, fallbackSymbol?: string): NormalizedTrade | null => {
+  const sideRaw = String(trade?.side || trade?.info?.side || '').toLowerCase();
+  const side: 'Buy' | 'Sell' = sideRaw === 'buy' || sideRaw === '1' || sideRaw === '4'
+    ? 'Buy'
+    : 'Sell';
+  // MEXC side ints: 1 open long, 2 close short, 3 open short, 4 close long
+  const mexcSide = Number(trade?.info?.side ?? trade?.side);
+  let resolvedSide = side;
+  if (Number.isFinite(mexcSide) && mexcSide >= 1 && mexcSide <= 4) {
+    resolvedSide = (mexcSide === 1 || mexcSide === 4) ? 'Buy' : 'Sell';
+  }
+
+  const qty = Number(trade?.amount ?? trade?.info?.vol ?? trade?.info?.qty ?? trade?.info?.execQty ?? trade?.qty ?? 0);
+  const price = Number(trade?.price ?? trade?.info?.price ?? trade?.info?.execPrice ?? 0);
+  const notionalRaw = Number(trade?.cost ?? trade?.info?.amount ?? trade?.info?.quoteQty ?? trade?.info?.execValue ?? 0);
+  const fee = Number(trade?.fee?.cost ?? trade?.info?.fee ?? trade?.info?.commission ?? trade?.info?.execFee ?? 0);
+  const realizedPnl = Number(
+    trade?.info?.closedPnl
+    ?? trade?.info?.realizedPnl
+    ?? trade?.info?.realizedProfit
+    ?? trade?.info?.profit
+    ?? 0,
+  );
+  const timestamp = Number(trade?.timestamp ?? trade?.info?.execTime ?? trade?.info?.tradeTime ?? trade?.info?.time ?? 0);
+  const tradeId = String(trade?.id || trade?.info?.execId || trade?.info?.tradeId || trade?.info?.id || '');
+  const orderId = String(trade?.order || trade?.info?.orderId || '');
+  const normalizedSymbol = toUiSymbol(trade?.info?.symbol || trade?.symbol || fallbackSymbol || '');
+  const feeCurrency = String(trade?.fee?.currency || trade?.info?.feeCurrency || trade?.info?.feeCoin || trade?.info?.commissionAsset || '');
+  const isMakerRaw = String(trade?.takerOrMaker || trade?.info?.isMaker || trade?.info?.maker || '').toLowerCase();
+  const isMaker = isMakerRaw === 'maker' || isMakerRaw === 'true' || trade?.info?.taker === false;
+  const notional = Number.isFinite(notionalRaw) && notionalRaw > 0
+    ? Math.abs(notionalRaw)
+    : (Number.isFinite(price) && Number.isFinite(qty) ? Math.abs(price * qty) : 0);
+
+  if (!tradeId || !(timestamp > 0) || !(price > 0) || !(qty > 0) || !normalizedSymbol) {
+    return null;
+  }
+
+  return {
+    tradeId,
+    orderId,
+    symbol: normalizedSymbol,
+    side: resolvedSide,
+    qty: String(Math.abs(qty)),
+    price: String(price),
+    notional: String(Number.isFinite(notional) ? notional : 0),
+    fee: String(Number.isFinite(fee) ? Math.abs(fee) : 0),
+    feeCurrency,
+    realizedPnl: String(Number.isFinite(realizedPnl) ? realizedPnl : 0),
+    isMaker,
+    timestamp: String(Math.floor(timestamp)),
+  };
+};
+
+const dedupeNormalizedFills = (fills: NormalizedTrade[]): NormalizedTrade[] => Array.from(
+  new Map(fills.map((trade) => [`${trade.symbol}:${trade.tradeId}`, trade])).values(),
+).sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
+
+const fetchBybitEquityHistory = async (
+  apiKeyName: string,
+  fromMs: number,
+  toMs: number,
+): Promise<{ points: ExchangeEquityHistoryPoint[]; rawEvents: number }> => {
   const events: Array<{ timeMs: number; currency: string; cashBalance: number }> = [];
   let pages = 0;
 
@@ -3452,7 +3586,6 @@ export const fetchExchangeEquityHistory = async (
   }
 
   events.sort((a, b) => a.timeMs - b.timeMs || a.currency.localeCompare(b.currency));
-
   const balances = new Map<string, number>();
   const rawPoints: ExchangeEquityHistoryPoint[] = [];
   for (const ev of events) {
@@ -3465,56 +3598,234 @@ export const fetchExchangeEquityHistory = async (
     rawPoints.push({ timeMs: ev.timeMs, equityUsd });
   }
 
-  // Downsample to ~1 point / 15 minutes (keep last in bucket) to limit DB size
-  const bucketMs = 15 * 60_000;
-  const byBucket = new Map<number, ExchangeEquityHistoryPoint>();
-  for (const point of rawPoints) {
-    const bucket = Math.floor(point.timeMs / bucketMs) * bucketMs;
-    byBucket.set(bucket, { timeMs: point.timeMs, equityUsd: point.equityUsd });
-  }
-  const points = Array.from(byBucket.values()).sort((a, b) => a.timeMs - b.timeMs);
-
-  return {
-    exchange: 'bybit',
-    points,
-    rawEvents: events.length,
-    fromMs,
-    toMs,
-  };
+  return { points: downsampleEquityPoints(rawPoints), rawEvents: events.length };
 };
 
-/**
- * On-demand fill history from Bybit execution list (7d windows + cursor).
- * Account-level (all symbols in linear USDT/USDC), not per-strategy.
- */
-export const fetchExchangeFillsHistory = async (
+const fetchWeexEquityHistory = async (
   apiKeyName: string,
-  options?: { fromMs?: number; toMs?: number; maxDays?: number },
-): Promise<{
-  exchange: string;
-  fills: NormalizedTrade[];
-  rawEvents: number;
-  fromMs: number;
-  toMs: number;
-}> => {
-  await ensureExchangeClientInitialized(apiKeyName);
+  fromMs: number,
+  toMs: number,
+): Promise<{ points: ExchangeEquityHistoryPoint[]; rawEvents: number }> => {
+  const entry = getCcxtClientEntry(apiKeyName);
+  const weexClient = await getWeexRestForKey(apiKeyName);
+  const events: Array<{ timeMs: number; balance: number }> = [];
+  let pages = 0;
+  const maxPages = 300;
 
-  if (!clients[apiKeyName]?.client) {
-    throw new Error(`Exchange fills history is currently supported only for Bybit (key: ${apiKeyName})`);
+  for (let windowStart = fromMs; windowStart < toMs; windowStart += WEEX_INCOME_WINDOW_MS) {
+    const windowEnd = Math.min(toMs, windowStart + WEEX_INCOME_WINDOW_MS);
+    let nextKeyId: string | undefined;
+    let nextKeyTime: string | undefined;
+    let guard = 0;
+    do {
+      if (pages >= maxPages) break;
+      pages += 1;
+      guard += 1;
+      const page = await entry.limiter.schedule(() => weexClient.fetchAccountIncome({
+        startTime: windowStart,
+        endTime: windowEnd,
+        limit: 100,
+        nextKeyId,
+        nextKeyTime,
+      })) as {
+        items: Array<Record<string, unknown>>;
+        hasNextPage: boolean;
+        nextKeyId?: string;
+        nextKeyTime?: string;
+      };
+      for (const row of page.items) {
+        const asset = String(row?.asset || '').toUpperCase();
+        if (asset && !STABLE_COINS.has(asset)) continue;
+        const timeMs = Number(row?.time);
+        const balance = Number(row?.balance);
+        if (!(timeMs > 0) || !Number.isFinite(balance)) continue;
+        events.push({ timeMs, balance });
+      }
+      if (page.hasNextPage && page.nextKeyId && page.nextKeyTime) {
+        nextKeyId = page.nextKeyId;
+        nextKeyTime = page.nextKeyTime;
+      } else {
+        nextKeyId = undefined;
+        nextKeyTime = undefined;
+      }
+    } while (nextKeyId && nextKeyTime && guard < 100);
   }
 
-  const nowMs = Date.now();
-  const maxDays = Math.min(180, Math.max(1, Math.floor(Number(options?.maxDays) || 90)));
-  const toMs = Math.min(nowMs, Number.isFinite(Number(options?.toMs)) ? Math.floor(Number(options?.toMs)) : nowMs);
-  const defaultFrom = toMs - maxDays * 86_400_000;
-  const fromMs = Math.max(
-    0,
-    Number.isFinite(Number(options?.fromMs)) ? Math.floor(Number(options?.fromMs)) : defaultFrom,
-  );
-  if (toMs <= fromMs) {
-    throw new Error('Invalid fills history range');
+  events.sort((a, b) => a.timeMs - b.timeMs);
+  const rawPoints = events
+    .filter((ev) => ev.balance > 0)
+    .map((ev) => ({ timeMs: ev.timeMs, equityUsd: ev.balance }));
+  return { points: downsampleEquityPoints(rawPoints), rawEvents: events.length };
+};
+
+const fetchBingxEquityHistory = async (
+  apiKeyName: string,
+  fromMs: number,
+  toMs: number,
+): Promise<{ points: ExchangeEquityHistoryPoint[]; rawEvents: number }> => {
+  const entry = getCcxtClientEntry(apiKeyName);
+  const incomeEvents: Array<{ timeMs: number; income: number; asset: string }> = [];
+  let pages = 0;
+  const maxPages = 250;
+  // BingX retains ~3 months of income; clamp fromMs.
+  const retentionFrom = Math.max(fromMs, toMs - 90 * 86_400_000);
+
+  for (let windowStart = retentionFrom; windowStart < toMs; windowStart += BINGX_INCOME_WINDOW_MS) {
+    const windowEnd = Math.min(toMs, windowStart + BINGX_INCOME_WINDOW_MS);
+    let guard = 0;
+    let cursorStart = windowStart;
+    do {
+      if (pages >= maxPages) break;
+      pages += 1;
+      guard += 1;
+      const response: any = await entry.limiter.schedule(() =>
+        entry.client.swapV2PrivateGetUserIncome({
+          startTime: cursorStart,
+          endTime: windowEnd,
+          limit: 1000,
+        }),
+      );
+      const list = Array.isArray(response?.data) ? response.data : (Array.isArray(response) ? response : []);
+      if (!list.length) break;
+      let minTs = Number.POSITIVE_INFINITY;
+      let maxTs = 0;
+      for (const row of list) {
+        const asset = String(row?.asset || '').toUpperCase();
+        if (asset && !STABLE_COINS.has(asset)) continue;
+        const timeMs = Number(row?.time);
+        const income = Number(row?.income);
+        if (!(timeMs > 0) || !Number.isFinite(income)) continue;
+        incomeEvents.push({ timeMs, income, asset: asset || 'USDT' });
+        minTs = Math.min(minTs, timeMs);
+        maxTs = Math.max(maxTs, timeMs);
+      }
+      // Advance window if page was full (oldest may be incomplete) — BingX has no cursor.
+      if (list.length >= 1000 && Number.isFinite(minTs) && minTs > cursorStart) {
+        cursorStart = Math.max(cursorStart + 1, minTs);
+      } else {
+        break;
+      }
+      if (!(maxTs > 0)) break;
+    } while (guard < 40);
   }
 
+  incomeEvents.sort((a, b) => a.timeMs - b.timeMs);
+  const liveWallet = await sumStableWalletUsd(apiKeyName);
+  if (!(liveWallet > 0) && incomeEvents.length === 0) {
+    return { points: [], rawEvents: 0 };
+  }
+
+  // Walk back from live wallet: subtract each income (newest → oldest), then reverse to forward series.
+  let cursorEquity = liveWallet > 0 ? liveWallet : 0;
+  const backward: ExchangeEquityHistoryPoint[] = [];
+  if (cursorEquity > 0) {
+    backward.push({ timeMs: toMs, equityUsd: cursorEquity });
+  }
+  for (let i = incomeEvents.length - 1; i >= 0; i -= 1) {
+    const ev = incomeEvents[i];
+    cursorEquity -= ev.income;
+    if (cursorEquity > 0) {
+      backward.push({ timeMs: ev.timeMs, equityUsd: cursorEquity });
+    }
+  }
+  backward.reverse();
+  // If we had no live wallet, build forward from first positive reconstructed point only when incomes exist.
+  if (!(liveWallet > 0) && incomeEvents.length > 0) {
+    let running = 0;
+    const forward: ExchangeEquityHistoryPoint[] = [];
+    for (const ev of incomeEvents) {
+      running += ev.income;
+      if (running > 0) forward.push({ timeMs: ev.timeMs, equityUsd: running });
+    }
+    return { points: downsampleEquityPoints(forward), rawEvents: incomeEvents.length };
+  }
+
+  return { points: downsampleEquityPoints(backward), rawEvents: incomeEvents.length };
+};
+
+const fetchMexcEquityHistory = async (
+  apiKeyName: string,
+  fromMs: number,
+  toMs: number,
+): Promise<{ points: ExchangeEquityHistoryPoint[]; rawEvents: number }> => {
+  const entry = getCcxtClientEntry(apiKeyName);
+
+  // Prefer daily equity series from asset analysis (when available).
+  try {
+    const response: any = await entry.limiter.schedule(() =>
+      entry.client.contractPrivatePostAccountAssetAnalysisRecentV3({}),
+    );
+    const data = response?.data || response || {};
+    const history = data?.historyDailyData || data?.history_daily_data || {};
+    const timeList: unknown[] = Array.isArray(history?.timeList) ? history.timeList : [];
+    const equityList: unknown[] = Array.isArray(history?.dailyEquityList) ? history.dailyEquityList : [];
+    const rawPoints: ExchangeEquityHistoryPoint[] = [];
+    for (let i = 0; i < Math.min(timeList.length, equityList.length); i += 1) {
+      const timeMs = Number(timeList[i]);
+      const equityUsd = Number(equityList[i]);
+      if (!(timeMs >= fromMs && timeMs <= toMs) || !(equityUsd > 0)) continue;
+      rawPoints.push({ timeMs, equityUsd });
+    }
+    if (rawPoints.length > 0) {
+      return { points: downsampleEquityPoints(rawPoints), rawEvents: rawPoints.length };
+    }
+  } catch (error) {
+    logger.warn(`MEXC asset analysis recent failed for ${apiKeyName}: ${(error as Error).message}`);
+  }
+
+  try {
+    const response: any = await entry.limiter.schedule(() =>
+      entry.client.contractPrivatePostAccountAssetAnalysisCalendarDailyV3({}),
+    );
+    const data = response?.data || response || {};
+    const timeList: unknown[] = Array.isArray(data?.timeList) ? data.timeList : [];
+    const equityList: unknown[] = Array.isArray(data?.dailyEquityList)
+      ? data.dailyEquityList
+      : (Array.isArray(data?.equityList) ? data.equityList : []);
+    const rawPoints: ExchangeEquityHistoryPoint[] = [];
+    for (let i = 0; i < Math.min(timeList.length, equityList.length); i += 1) {
+      const timeMs = Number(timeList[i]);
+      const equityUsd = Number(equityList[i]);
+      if (!(timeMs >= fromMs && timeMs <= toMs) || !(equityUsd > 0)) continue;
+      rawPoints.push({ timeMs, equityUsd });
+    }
+    if (rawPoints.length > 0) {
+      return { points: downsampleEquityPoints(rawPoints), rawEvents: rawPoints.length };
+    }
+  } catch (error) {
+    logger.warn(`MEXC calendar daily analysis failed for ${apiKeyName}: ${(error as Error).message}`);
+  }
+
+  // Fallback: reconstruct approximate wallet from fills (profit - fee) + live anchor.
+  const fillsHist = await fetchMexcFillsHistory(apiKeyName, fromMs, toMs).catch(() => ({
+    fills: [] as NormalizedTrade[],
+    rawEvents: 0,
+  }));
+  const liveWallet = await sumStableWalletUsd(apiKeyName);
+  if (!(liveWallet > 0) || fillsHist.fills.length === 0) {
+    return { points: [], rawEvents: fillsHist.rawEvents };
+  }
+
+  const ordered = [...fillsHist.fills].sort((a, b) => Number(b.timestamp) - Number(a.timestamp));
+  let cursorEquity = liveWallet;
+  const backward: ExchangeEquityHistoryPoint[] = [{ timeMs: toMs, equityUsd: cursorEquity }];
+  for (const fill of ordered) {
+    const pnl = Number(fill.realizedPnl) || 0;
+    const fee = Number(fill.fee) || 0;
+    cursorEquity -= (pnl - fee);
+    if (cursorEquity > 0) {
+      backward.push({ timeMs: Number(fill.timestamp), equityUsd: cursorEquity });
+    }
+  }
+  backward.reverse();
+  return { points: downsampleEquityPoints(backward), rawEvents: fillsHist.rawEvents };
+};
+
+const fetchBybitFillsHistory = async (
+  apiKeyName: string,
+  fromMs: number,
+  toMs: number,
+): Promise<{ fills: NormalizedTrade[]; rawEvents: number }> => {
   const windowMs = 7 * 86_400_000;
   const pageLimit = 100;
   const maxPages = 400;
@@ -3581,6 +3892,7 @@ export const fetchExchangeFillsHistory = async (
         ? Math.abs(notionalRaw)
         : (Number.isFinite(price) && Number.isFinite(qty) ? Math.abs(price * qty) : 0);
 
+      if (!tradeId || !(timestamp > 0)) return null;
       return {
         tradeId,
         orderId,
@@ -3593,22 +3905,292 @@ export const fetchExchangeFillsHistory = async (
         feeCurrency,
         realizedPnl: String(Number.isFinite(realizedPnl) ? realizedPnl : 0),
         isMaker,
-        timestamp: String(Number.isFinite(timestamp) ? Math.floor(timestamp) : 0),
+        timestamp: String(Math.floor(timestamp)),
       } as NormalizedTrade;
     })
-    .filter((trade) => Boolean(trade.tradeId && trade.timestamp !== '0'));
+    .filter((trade): trade is NormalizedTrade => Boolean(trade));
 
-  const deduped = Array.from(
-    new Map(fills.map((trade) => [`${trade.symbol}:${trade.tradeId}`, trade])).values(),
-  ).sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
+  return { fills: dedupeNormalizedFills(fills), rawEvents: collected.length };
+};
 
-  return {
-    exchange: 'bybit',
-    fills: deduped,
-    rawEvents: collected.length,
-    fromMs,
-    toMs,
-  };
+const fetchWeexFillsHistory = async (
+  apiKeyName: string,
+  fromMs: number,
+  toMs: number,
+): Promise<{ fills: NormalizedTrade[]; rawEvents: number }> => {
+  const entry = getCcxtClientEntry(apiKeyName);
+  const weexClient = await getWeexRestForKey(apiKeyName);
+  const collected: any[] = [];
+  let pages = 0;
+  const maxPages = 400;
+
+  for (let windowStart = fromMs; windowStart < toMs; windowStart += WEEX_FILLS_WINDOW_MS) {
+    const windowEnd = Math.min(toMs, windowStart + WEEX_FILLS_WINDOW_MS);
+    let cursorSince = windowStart;
+    let guard = 0;
+    do {
+      if (pages >= maxPages) break;
+      pages += 1;
+      guard += 1;
+      const trades = await entry.limiter.schedule(() =>
+        weexClient.fetchMyTrades(undefined, cursorSince, 100, { until: windowEnd }),
+      );
+      const list = Array.isArray(trades) ? trades : [];
+      if (!list.length) break;
+      collected.push(...list);
+      const maxTs = list.reduce((acc: number, t: any) => Math.max(acc, Number(t?.timestamp || 0)), 0);
+      if (!(maxTs > cursorSince) || list.length < 100) break;
+      cursorSince = maxTs + 1;
+      if (cursorSince >= windowEnd) break;
+    } while (guard < 80);
+  }
+
+  const fills = collected
+    .map((trade) => normalizeCcxtFill(trade))
+    .filter((trade): trade is NormalizedTrade => Boolean(trade));
+  return { fills: dedupeNormalizedFills(fills), rawEvents: collected.length };
+};
+
+const fetchBingxFillsHistory = async (
+  apiKeyName: string,
+  fromMs: number,
+  toMs: number,
+): Promise<{ fills: NormalizedTrade[]; rawEvents: number }> => {
+  const entry = getCcxtClientEntry(apiKeyName);
+  const symbols = await resolveBackfillSymbols(apiKeyName);
+  if (!symbols.length) {
+    return { fills: [], rawEvents: 0 };
+  }
+
+  const collected: NormalizedTrade[] = [];
+  let rawEvents = 0;
+
+  for (const uiSymbol of symbols) {
+    let resolvedSymbol: string;
+    try {
+      resolvedSymbol = await resolveCcxtSymbol(entry, uiSymbol);
+    } catch (error) {
+      logger.warn(`BingX backfill skip symbol ${uiSymbol}: ${(error as Error).message}`);
+      continue;
+    }
+
+    for (let windowStart = fromMs; windowStart < toMs; windowStart += BINGX_FILLS_WINDOW_MS) {
+      const windowEnd = Math.min(toMs, windowStart + BINGX_FILLS_WINDOW_MS);
+      try {
+        const trades = await entry.limiter.schedule(() =>
+          entry.client.fetchMyTrades(resolvedSymbol, windowStart, 500, { until: windowEnd }),
+        );
+        const list = Array.isArray(trades) ? trades : [];
+        rawEvents += list.length;
+        for (const trade of list) {
+          const normalized = normalizeCcxtFill(trade, uiSymbol);
+          if (normalized) collected.push(normalized);
+        }
+      } catch (error) {
+        if (isBingxTradeEndpointDisabledError(error)) {
+          logger.warn(`BingX fills temporarily disabled for ${apiKeyName}/${uiSymbol}: ${(error as Error).message}`);
+          continue;
+        }
+        logger.warn(`BingX fills failed for ${apiKeyName}/${uiSymbol}: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  return { fills: dedupeNormalizedFills(collected), rawEvents };
+};
+
+const fetchMexcFillsHistory = async (
+  apiKeyName: string,
+  fromMs: number,
+  toMs: number,
+): Promise<{ fills: NormalizedTrade[]; rawEvents: number }> => {
+  const entry = getCcxtClientEntry(apiKeyName);
+  const collected: NormalizedTrade[] = [];
+  let rawEvents = 0;
+
+  // Try account-wide history_deals (used by our scanners; may not be in all ccxt builds).
+  try {
+    let page = 1;
+    const maxPages = 50;
+    while (page <= maxPages) {
+      let response: any;
+      try {
+        response = await entry.limiter.schedule(() =>
+          entry.client.request('order/list/history_deals', 'contract', 'GET', {
+            page_num: page,
+            page_size: 100,
+          }),
+        );
+      } catch {
+        const fn = (entry.client as any).contractPrivateGetOrderListHistoryDeals;
+        if (typeof fn !== 'function') break;
+        response = await entry.limiter.schedule(() =>
+          fn.call(entry.client, { page_num: page, page_size: 100 }),
+        );
+      }
+      if (!response) break;
+      const data = response?.data ?? response;
+      const rows: any[] = Array.isArray(data?.resultList)
+        ? data.resultList
+        : (Array.isArray(data) ? data : []);
+      if (!rows.length) break;
+      rawEvents += rows.length;
+      for (const row of rows) {
+        const ts = Number(row?.timestamp ?? row?.createTime ?? 0);
+        if (ts > 0 && (ts < fromMs || ts > toMs)) continue;
+        const sideNum = Number(row?.side);
+        const side: 'Buy' | 'Sell' = (sideNum === 1 || sideNum === 4) ? 'Buy' : 'Sell';
+        const qty = Number(row?.vol ?? row?.qty ?? 0);
+        const price = Number(row?.price ?? 0);
+        const fee = Number(row?.fee ?? 0);
+        const realizedPnl = Number(row?.profit ?? 0);
+        const tradeId = String(row?.id || '');
+        const symbol = toUiSymbol(String(row?.symbol || '').replace('_', ''));
+        if (!tradeId || !(ts > 0) || !(qty > 0) || !(price > 0) || !symbol) continue;
+        collected.push({
+          tradeId,
+          orderId: String(row?.orderId || ''),
+          symbol,
+          side,
+          qty: String(Math.abs(qty)),
+          price: String(price),
+          notional: String(Math.abs(price * qty)),
+          fee: String(Math.abs(fee)),
+          feeCurrency: String(row?.feeCurrency || 'USDT'),
+          realizedPnl: String(Number.isFinite(realizedPnl) ? realizedPnl : 0),
+          isMaker: row?.taker === false,
+          timestamp: String(Math.floor(ts)),
+        });
+      }
+      const totalPage = Number(data?.totalPage || 0);
+      if (totalPage > 0 && page >= totalPage) break;
+      if (rows.length < 100) break;
+      page += 1;
+    }
+    if (collected.length > 0) {
+      return { fills: dedupeNormalizedFills(collected), rawEvents };
+    }
+  } catch (error) {
+    logger.warn(`MEXC history_deals unavailable for ${apiKeyName}: ${(error as Error).message}`);
+  }
+
+  // Fallback: per-symbol order_deals via ccxt fetchMyTrades.
+  const symbols = await resolveBackfillSymbols(apiKeyName);
+  for (const uiSymbol of symbols) {
+    let resolvedSymbol: string;
+    try {
+      resolvedSymbol = await resolveCcxtSymbol(entry, uiSymbol);
+    } catch {
+      continue;
+    }
+    try {
+      const trades = await entry.limiter.schedule(() =>
+        entry.client.fetchMyTrades(resolvedSymbol, fromMs, 100, {
+          until: toMs,
+          end_time: toMs,
+        }),
+      );
+      const list = Array.isArray(trades) ? trades : [];
+      rawEvents += list.length;
+      for (const trade of list) {
+        const normalized = normalizeCcxtFill(trade, uiSymbol);
+        if (normalized) collected.push(normalized);
+      }
+    } catch (error) {
+      logger.warn(`MEXC fills failed for ${apiKeyName}/${uiSymbol}: ${(error as Error).message}`);
+    }
+  }
+
+  return { fills: dedupeNormalizedFills(collected), rawEvents };
+};
+
+/**
+ * On-demand equity series from the exchange.
+ * Bybit: Unified Account transaction log cashBalance.
+ * WEEX: account income `balance` after each bill.
+ * BingX: income walk-back from live wallet (approx, ≤~90d).
+ * MEXC: asset analysis daily equity, else fill-based reconstruct.
+ * Does NOT include open UPNL unless the exchange series already embeds it (MEXC analysis).
+ */
+export const fetchExchangeEquityHistory = async (
+  apiKeyName: string,
+  options?: ExchangeHistoryRangeOptions,
+): Promise<{
+  exchange: string;
+  points: ExchangeEquityHistoryPoint[];
+  rawEvents: number;
+  fromMs: number;
+  toMs: number;
+}> => {
+  const exchange = await detectExchangeForKey(apiKeyName);
+  const { fromMs, toMs } = resolveHistoryRange(options);
+
+  if (exchange === 'bybit') {
+    if (!clients[apiKeyName]?.client) {
+      throw new Error(`Bybit client not initialized for ${apiKeyName}`);
+    }
+    const result = await fetchBybitEquityHistory(apiKeyName, fromMs, toMs);
+    return { exchange, points: result.points, rawEvents: result.rawEvents, fromMs, toMs };
+  }
+
+  if (exchange === 'weex') {
+    const result = await fetchWeexEquityHistory(apiKeyName, fromMs, toMs);
+    return { exchange, points: result.points, rawEvents: result.rawEvents, fromMs, toMs };
+  }
+
+  if (exchange === 'bingx') {
+    const result = await fetchBingxEquityHistory(apiKeyName, fromMs, toMs);
+    return { exchange, points: result.points, rawEvents: result.rawEvents, fromMs, toMs };
+  }
+
+  if (exchange === 'mexc') {
+    const result = await fetchMexcEquityHistory(apiKeyName, fromMs, toMs);
+    return { exchange, points: result.points, rawEvents: result.rawEvents, fromMs, toMs };
+  }
+
+  throw new Error(`Exchange equity history is not supported for ${exchange} (key: ${apiKeyName})`);
+};
+
+/**
+ * On-demand fill history for monitoring backfill (account / fanout, not per-strategy).
+ */
+export const fetchExchangeFillsHistory = async (
+  apiKeyName: string,
+  options?: ExchangeHistoryRangeOptions,
+): Promise<{
+  exchange: string;
+  fills: NormalizedTrade[];
+  rawEvents: number;
+  fromMs: number;
+  toMs: number;
+}> => {
+  const exchange = await detectExchangeForKey(apiKeyName);
+  const { fromMs, toMs } = resolveHistoryRange(options);
+
+  if (exchange === 'bybit') {
+    if (!clients[apiKeyName]?.client) {
+      throw new Error(`Bybit client not initialized for ${apiKeyName}`);
+    }
+    const result = await fetchBybitFillsHistory(apiKeyName, fromMs, toMs);
+    return { exchange, fills: result.fills, rawEvents: result.rawEvents, fromMs, toMs };
+  }
+
+  if (exchange === 'weex') {
+    const result = await fetchWeexFillsHistory(apiKeyName, fromMs, toMs);
+    return { exchange, fills: result.fills, rawEvents: result.rawEvents, fromMs, toMs };
+  }
+
+  if (exchange === 'bingx') {
+    const result = await fetchBingxFillsHistory(apiKeyName, fromMs, toMs);
+    return { exchange, fills: result.fills, rawEvents: result.rawEvents, fromMs, toMs };
+  }
+
+  if (exchange === 'mexc') {
+    const result = await fetchMexcFillsHistory(apiKeyName, fromMs, toMs);
+    return { exchange, fills: result.fills, rawEvents: result.rawEvents, fromMs, toMs };
+  }
+
+  throw new Error(`Exchange fills history is not supported for ${exchange} (key: ${apiKeyName})`);
 };
 
 export const closePositionPercent = async (

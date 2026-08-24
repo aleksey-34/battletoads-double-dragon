@@ -682,19 +682,27 @@ class WeexRestClient {
     });
   }
 
-  async fetchMyTrades(symbol?: string, since?: number, limit = 100): Promise<any[]> {
+  async fetchMyTrades(
+    symbol?: string,
+    since?: number,
+    limit = 100,
+    params: { until?: number } = {},
+  ): Promise<any[]> {
     const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 100));
     const privateSymbol = symbol ? toWeexPrivateSymbol(symbol) : undefined;
+    const until = Number(params?.until);
+    const queryBase: Record<string, WeexQueryValue> = {
+      symbol: privateSymbol,
+      startTime: since ? Math.floor(since) : undefined,
+      endTime: Number.isFinite(until) && until > 0 ? Math.floor(until) : undefined,
+      limit: safeLimit,
+    };
 
     let response: any;
     try {
       response = await this.request('GET', '/capi/v3/userTrades', {
         auth: true,
-        query: {
-          symbol: privateSymbol,
-          startTime: since ? Math.floor(since) : undefined,
-          limit: safeLimit,
-        },
+        query: queryBase,
       });
     } catch (error) {
       // WEEX may reject certain symbol values (-1142); retry without symbol filter
@@ -702,7 +710,8 @@ class WeexRestClient {
         response = await this.request('GET', '/capi/v3/userTrades', {
           auth: true,
           query: {
-            startTime: since ? Math.floor(since) : undefined,
+            startTime: queryBase.startTime,
+            endTime: queryBase.endTime,
             limit: safeLimit,
           },
         });
@@ -729,8 +738,62 @@ class WeexRestClient {
       info: {
         ...item,
         symbol: toWeexPrivateSymbol(item?.symbol),
+        realizedPnl: item?.realizedPnl ?? item?.realizedProfit ?? item?.closedPnl,
       },
     }));
+  }
+
+  /**
+   * Contract account income / bills. Response items include running `balance`
+   * (wallet after event) — suitable for equity backfill like Bybit tx log.
+   * Windows up to ~100 days; paginate via nextKey when hasNextPage.
+   */
+  async fetchAccountIncome(options: {
+    startTime?: number;
+    endTime?: number;
+    limit?: number;
+    nextKeyId?: number | string;
+    nextKeyTime?: number | string;
+    incomeType?: string;
+  } = {}): Promise<{
+    items: Array<Record<string, unknown>>;
+    hasNextPage: boolean;
+    nextKeyId?: string;
+    nextKeyTime?: string;
+  }> {
+    const limit = Math.max(1, Math.min(Number(options.limit) || 100, 100));
+    const body: Record<string, unknown> = { limit };
+    if (Number.isFinite(Number(options.startTime)) && Number(options.startTime) > 0) {
+      body.startTime = Math.floor(Number(options.startTime));
+    }
+    if (Number.isFinite(Number(options.endTime)) && Number(options.endTime) > 0) {
+      body.endTime = Math.floor(Number(options.endTime));
+    }
+    if (options.incomeType) {
+      body.incomeType = String(options.incomeType);
+    }
+    if (options.nextKeyId != null && options.nextKeyTime != null) {
+      body.nextKeyId = options.nextKeyId;
+      body.nextKeyTime = options.nextKeyTime;
+    }
+
+    const response = await this.request('POST', '/capi/v3/account/income', {
+      auth: true,
+      body,
+    });
+
+    const items = Array.isArray(response?.items)
+      ? response.items
+      : Array.isArray(response)
+        ? response
+        : [];
+    const nextKey = response?.nextKey || {};
+    return {
+      items,
+      hasNextPage: Boolean(response?.hasNextPage),
+      nextKeyId: nextKey?.nextKeyId != null ? String(nextKey.nextKeyId) : undefined,
+      nextKeyTime: nextKey?.nextKeyTime != null ? String(nextKey.nextKeyTime) : undefined,
+    };
   }
 
   async setLeverage(leverage: number, symbol?: string, params: any = {}): Promise<any> {

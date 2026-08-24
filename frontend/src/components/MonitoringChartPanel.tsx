@@ -179,7 +179,7 @@ type MonitoringChartPanelProps = {
   loading?: boolean;
   currencyLabel?: string;
   apiKeyName?: string;
-  /** On-demand: pull equity history from the exchange (Bybit). */
+  /** On-demand: pull equity + fills history from the exchange (Bybit/BingX/WEEX/MEXC). */
   onBackfillFromExchange?: () => void | Promise<void>;
   backfillLoading?: boolean;
   backfillSupported?: boolean;
@@ -314,7 +314,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   const coverageHint = useMemo(() => {
     if (!Array.isArray(snapshots) || snapshots.length === 0) {
       return chartDays === 0
-        ? 'В БД пока нет снимков. Нажмите «С биржи (весь период)» — подтянем историю с Bybit по запросу.'
+        ? 'В БД пока нет снимков. Нажмите «С биржи (весь период)» — подтянем историю с биржи по запросу.'
         : null;
     }
     const first = String(snapshots[0]?.recorded_at || '').trim();
@@ -656,8 +656,8 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
         </Button>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {backfillSupported === false
-            ? 'История с биржи пока только для Bybit.'
-            : '«С биржи» — по запросу: equity (Transaction Log) + fills (Execution List). Bybit. Не крутится в фоне.'}
+            ? 'История с биржи: Bybit, BingX, WEEX, MEXC (не Binance/Bitget).'
+            : '«С биржи» — по запросу: equity + fills. Bybit / BingX / WEEX / MEXC. Не крутится в фоне.'}
         </Typography.Text>
       </Space>
 
