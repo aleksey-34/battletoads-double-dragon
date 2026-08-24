@@ -48,6 +48,7 @@ const mapStrategyRow = (row: Record<string, unknown>): StrategyChartStrategy => 
   state: String(row.state || 'flat') as StrategyChartStrategy['state'],
   entry_ratio: row.entry_ratio === null || row.entry_ratio === undefined ? null : Number(row.entry_ratio),
   last_signal: row.last_signal != null ? String(row.last_signal) : null,
+  strategy_type: row.strategy_type != null ? String(row.strategy_type) : '',
 });
 
 const mapStrategyTradeEvent = (row: Record<string, unknown>): StrategyTradeEvent | null => {

@@ -17,6 +17,7 @@ export type StrategyChartStrategy = {
   state: 'flat' | 'long' | 'short' | string;
   entry_ratio?: number | null;
   last_signal?: string | null;
+  strategy_type?: string;
 };
 
 export type TradeRoundTrip = {
@@ -281,29 +282,31 @@ export const buildTradeFlowSummary = (
   const openCandidates = trips.filter((t) => !t.exit);
   const openTrip = openCandidates.length > 0 ? openCandidates[openCandidates.length - 1] : undefined;
   return {
-    roundTrips: completed.slice(-8),
+    roundTrips: completed.slice(-40),
     openTrip,
     upnlPercent: computeOpenUpnlPercent(strategy, openTrip?.entry, chartData),
     lastSignal: String(strategy.last_signal || '').trim() || '—',
   };
 };
 
-const MAX_FLOW_TRIPS = 6;
+const MAX_FLOW_TRIPS = 24;
 
 export const buildTradeFlowLayers = (
   strategy: StrategyChartStrategy,
   events: StrategyTradeEvent[],
   chartData: unknown[],
   idPrefix: string,
+  options?: { maxTrips?: number },
 ): { overlayLines: OverlayLine[]; markers: ChartMarker[]; summary: TradeFlowSummary } => {
   const summary = buildTradeFlowSummary(strategy, events, chartData);
   const displaySymbol = formatStrategyDisplaySymbol(strategy);
   const overlayLines: OverlayLine[] = [];
   const markers: ChartMarker[] = [];
   const bounds = chartTimeBoundsFromCandles(chartData);
+  const maxTrips = Math.max(1, Math.min(80, options?.maxTrips ?? MAX_FLOW_TRIPS));
 
   const tripsToDraw = [
-    ...summary.roundTrips.slice(-MAX_FLOW_TRIPS),
+    ...summary.roundTrips.slice(-maxTrips),
     ...(summary.openTrip ? [summary.openTrip] : []),
   ];
 
@@ -506,6 +509,120 @@ export const buildEntryOverlay = (payload: unknown[], id: string, entryRatio: nu
 
 export const buildTpOverlay = (payload: unknown[], id: string, tpRatio: number): OverlayLine | null => {
   return buildConstantOverlay(payload, id, '#16a34a', tpRatio, 2);
+};
+
+const isZzPivotChartType = (strategyType: string): boolean => {
+  const token = String(strategyType || '').trim();
+  return token === 'ZZ_Fast' || token === 'ZZ_Instance' || token === 'zz_hamster_zz6' || token === 'zz_hamster_zz2';
+};
+
+const zzSlowMultiplier = (strategyType: string): number => {
+  const token = String(strategyType || '').trim();
+  return token === 'ZZ_Instance' || token === 'zz_hamster_zz2' ? 2 : 3;
+};
+
+const windowExtrema = (
+  candles: ParsedCandlePoint[],
+  endIndex: number,
+  length: number,
+  field: 'high' | 'low',
+): number => {
+  const start = Math.max(0, endIndex - length + 1);
+  let extreme = field === 'high' ? -Infinity : Infinity;
+  for (let i = start; i <= endIndex; i += 1) {
+    const value = candles[i][field];
+    extreme = field === 'high' ? Math.max(extreme, value) : Math.min(extreme, value);
+  }
+  return extreme;
+};
+
+export const buildZzPivotSnapshot = (
+  payload: unknown[],
+  fastLen: number,
+  strategyType: string,
+  idPrefix: string,
+): DonchianSnapshot | null => {
+  const candles = payload
+    .map(parseCandlePoint)
+    .filter((item): item is ParsedCandlePoint => !!item)
+    .sort((a, b) => a.time - b.time);
+  const fast = Math.max(2, Math.floor(fastLen || 20));
+  const slow = Math.max(fast + 1, Math.round(fast * zzSlowMultiplier(strategyType)));
+  if (candles.length < slow + 2) {
+    return null;
+  }
+
+  const highData: Array<{ time: number; value: number }> = [];
+  const lowData: Array<{ time: number; value: number }> = [];
+  const centerData: Array<{ time: number; value: number }> = [];
+  let levelLong = 0;
+  let levelShort = 0;
+
+  for (let i = 0; i < candles.length; i += 1) {
+    if (i >= slow) {
+      const fasth = windowExtrema(candles, i, fast, 'high');
+      const slowh = windowExtrema(candles, i, slow, 'high');
+      const fastl = windowExtrema(candles, i, fast, 'low');
+      const slowl = windowExtrema(candles, i, slow, 'low');
+      const prevFasth = windowExtrema(candles, i - 1, fast, 'high');
+      const prevSlowh = windowExtrema(candles, i - 1, slow, 'high');
+      const prevFastl = windowExtrema(candles, i - 1, fast, 'low');
+      const prevSlowl = windowExtrema(candles, i - 1, slow, 'low');
+      if (prevFasth === prevSlowh && fasth < prevFasth) {
+        levelLong = prevFasth;
+      }
+      if (prevFastl === prevSlowl && fastl > prevFastl) {
+        levelShort = prevFastl;
+      }
+    }
+    const fallback = candles[i].close;
+    const high = levelLong > 0 ? levelLong : fallback;
+    const low = levelShort > 0 ? levelShort : fallback;
+    highData.push({ time: candles[i].time, value: high });
+    lowData.push({ time: candles[i].time, value: low });
+    centerData.push({ time: candles[i].time, value: (high + low) / 2 });
+  }
+
+  return {
+    highSeries: highData,
+    lowSeries: lowData,
+    centerSeries: centerData,
+    overlays: [
+      { id: `${idPrefix}:zz_long`, color: '#22c55e', lineWidth: 2, data: highData },
+      { id: `${idPrefix}:zz_short`, color: '#ef4444', lineWidth: 2, data: lowData },
+      { id: `${idPrefix}:zz_mid`, color: '#f59e0b', lineWidth: 1, data: centerData },
+    ],
+  };
+};
+
+export const buildSmaOverlay = (
+  payload: unknown[],
+  length: number,
+  idPrefix: string,
+): OverlayLine | null => {
+  const candles = payload
+    .map(parseCandlePoint)
+    .filter((item): item is ParsedCandlePoint => !!item)
+    .sort((a, b) => a.time - b.time);
+  const period = Math.max(2, Math.floor(length || 20));
+  if (candles.length < period) {
+    return null;
+  }
+  const data: Array<{ time: number; value: number }> = [];
+  let running = 0;
+  for (let i = 0; i < candles.length; i += 1) {
+    running += candles[i].close;
+    if (i >= period) {
+      running -= candles[i - period].close;
+    }
+    if (i >= period - 1) {
+      data.push({ time: candles[i].time, value: running / period });
+    }
+  }
+  if (data.length === 0) {
+    return null;
+  }
+  return { id: `${idPrefix}:sma`, color: '#a855f7', lineWidth: 2, data };
 };
 
 const buildTpWaveSnapshot = (
@@ -717,13 +834,18 @@ export const buildOpenStrategyChartLayers = (
   _exchangeTrades: TradeHistoryRow[],
   idPrefix: string,
 ): OpenStrategyChartLayers => {
-  const donchian = buildDonchianSnapshot(
+  const channelLen = strategy.price_channel_length || 20;
+  const zzLevels = isZzPivotChartType(String(strategy.strategy_type || ''))
+    ? buildZzPivotSnapshot(chartData, channelLen, String(strategy.strategy_type || ''), idPrefix)
+    : null;
+  const donchian = zzLevels || buildDonchianSnapshot(
     chartData,
-    strategy.price_channel_length || 20,
+    channelLen,
     strategy.detection_source || 'wick',
     idPrefix,
   );
-  const tpWave = buildTpWaveSnapshot(donchian, strategy.take_profit_percent, idPrefix);
+  const tpWave = zzLevels ? null : buildTpWaveSnapshot(donchian, strategy.take_profit_percent, idPrefix);
+  const sma = buildSmaOverlay(chartData, channelLen, idPrefix);
 
   const entryRatioValue = strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
     ? Number(strategy.entry_ratio)
@@ -754,6 +876,7 @@ export const buildOpenStrategyChartLayers = (
   const overlayLines: OverlayLine[] = [
     ...(donchian ? donchian.overlays : []),
     ...(tpWave ? tpWave.overlays : []),
+    ...(sma ? [sma] : []),
     ...(entryOverlay ? [entryOverlay] : []),
     ...(tpOverlay ? [tpOverlay] : []),
     ...flow.overlayLines,

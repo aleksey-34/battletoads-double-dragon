@@ -15,6 +15,7 @@ import {
   groupMonitoringTrades,
   pnlBucketLabel,
 } from '../utils/monitoringTradeEnrichment';
+import type { StrategyChartStrategy } from '../utils/strategyChartOverlays';
 
 export type MonitoringSnapshot = {
   recorded_at?: string;
@@ -206,28 +207,58 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   const [equityAsReturn, setEquityAsReturn] = useState(true);
   const [tradeGroupMode, setTradeGroupMode] = useState<MonitoringTradeGroupMode>('none');
   const [groupSynthLegs, setGroupSynthLegs] = useState(true);
+  const [showStrategyCol, setShowStrategyCol] = useState(true);
   const [synthById, setSynthById] = useState(() => new Map<number, SynthStrategyMeta>());
+  const [strategiesById, setStrategiesById] = useState(() => new Map<number, StrategyChartStrategy>());
   const [chartSymbol, setChartSymbol] = useState<string | null>(null);
   const [chartStrategyId, setChartStrategyId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!apiKeyName) {
       setSynthById(new Map());
+      setStrategiesById(new Map());
       return;
     }
     let cancelled = false;
-    void axios.get<unknown[]>(`/api/strategies/${encodeURIComponent(apiKeyName)}`, { timeout: 30_000 })
+    void axios.get<unknown[]>(`/api/strategies/${encodeURIComponent(apiKeyName)}`, { timeout: 60_000 })
       .then((res) => {
         if (cancelled) return;
         const rows = Array.isArray(res.data) ? res.data : [];
         const map = buildSynthStrategyMap(rows as Array<Record<string, unknown>>);
         setSynthById(map);
-        if (map.size > 0) {
+        const byId = new Map<number, StrategyChartStrategy>();
+        for (const raw of rows as Array<Record<string, unknown>>) {
+          const id = Number(raw.id);
+          if (!Number.isFinite(id) || id <= 0) continue;
+          byId.set(id, {
+            id,
+            name: String(raw.name || `strategy-${id}`),
+            market_mode: String(raw.market_mode || 'mono') === 'synthetic' ? 'synthetic' : 'mono',
+            base_symbol: String(raw.base_symbol || ''),
+            quote_symbol: String(raw.quote_symbol || ''),
+            interval: String(raw.interval || '4h'),
+            base_coef: Number(raw.base_coef) || 1,
+            quote_coef: Number(raw.quote_coef) || 1,
+            price_channel_length: Number(raw.price_channel_length) || 20,
+            detection_source: String(raw.detection_source || 'wick') === 'close' ? 'close' : 'wick',
+            take_profit_percent: Number(raw.take_profit_percent) || 0,
+            state: String(raw.state || 'flat'),
+            entry_ratio: raw.entry_ratio == null ? null : Number(raw.entry_ratio),
+            last_signal: raw.last_signal != null ? String(raw.last_signal) : null,
+            strategy_type: String(raw.strategy_type || ''),
+          });
+        }
+        setStrategiesById(byId);
+        if (map.size > 0 || byId.size > 0) {
           setGroupSynthLegs(true);
+          setShowStrategyCol(true);
         }
       })
       .catch(() => {
-        if (!cancelled) setSynthById(new Map());
+        if (!cancelled) {
+          setSynthById(new Map());
+          setStrategiesById(new Map());
+        }
       });
     return () => { cancelled = true; };
   }, [apiKeyName]);
@@ -251,12 +282,12 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   }, [chartStrategyId, chartSymbol, enrichedTrades]);
 
   const openTradeChart = (row: DisplayMonitoringTradeRow) => {
+    const strategyId = Number(row.strategyId || 0) || null;
+    setChartStrategyId(strategyId);
     if (row.synthGrouped && row.synthPairLabel) {
       setChartSymbol(row.synthPairLabel);
-      setChartStrategyId(Number(row.strategyId || 0) || null);
       return;
     }
-    setChartStrategyId(null);
     setChartSymbol(String(row.symbol || '').toUpperCase());
   };
 
@@ -495,6 +526,22 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
         </Space>
       ),
     },
+    ...(showStrategyCol ? [{
+      title: 'Стратегия',
+      key: 'strategy',
+      width: 160,
+      render: (_: unknown, row: DisplayMonitoringTradeRow) => {
+        const meta = strategiesById.get(Number(row.strategyId || 0));
+        if (!meta) {
+          return <Typography.Text type="secondary">{row.strategyId ? `#${row.strategyId}` : '—'}</Typography.Text>;
+        }
+        return (
+          <span title={`${meta.name} · ${meta.strategy_type} #${meta.id}`}>
+            {meta.name}
+          </span>
+        );
+      },
+    }] : []),
     {
       title: 'PnL %',
       dataIndex: 'pnlPercent',
@@ -507,13 +554,13 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
         { text: '— (вход)', value: 'pending' },
       ],
       onFilter: (value: React.Key | boolean, row: EnrichedMonitoringTradeRow) => {
-        if (value === 'profit') return row.pnlPercent != null && row.pnlPercent >= 0;
-        if (value === 'loss') return row.pnlPercent != null && row.pnlPercent < 0;
-        return row.pnlPercent == null;
+        if (value === 'profit') return row.flowType === 'out' && row.pnlPercent != null && row.pnlPercent >= 0;
+        if (value === 'loss') return row.flowType === 'out' && row.pnlPercent != null && row.pnlPercent < 0;
+        return row.flowType !== 'out' || row.pnlPercent == null;
       },
-      render: (v: number | null) => {
-        if (v == null || !Number.isFinite(v)) {
-          return <Typography.Text type="secondary">—</Typography.Text>;
+      render: (v: number | null, row: EnrichedMonitoringTradeRow) => {
+        if (row.flowType !== 'out' || v == null || !Number.isFinite(v)) {
+          return <Typography.Text type="secondary">{row.flowType === 'out' ? '—' : 'вход'}</Typography.Text>;
         }
         const color = v >= 0 ? '#16a34a' : '#dc2626';
         return <span style={{ color, fontWeight: 600 }}>{fmtSignedPct(v)}</span>;
@@ -775,6 +822,14 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
                   Группировать synth-ноги
                 </Checkbox>
               ) : null}
+              {strategiesById.size > 0 ? (
+                <Checkbox
+                  checked={showStrategyCol}
+                  onChange={(e) => setShowStrategyCol(e.target.checked)}
+                >
+                  Показать стратегию
+                </Checkbox>
+              ) : null}
               <Segmented
                 size="small"
                 value={tradeGroupMode}
@@ -791,9 +846,10 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
           </Space>
           <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
             IN — вход · OUT — выход · REV — переворот.
+            PnL% только на OUT (вход без цены закрытия — не 0%).
             {synthById.size > 0
               ? ' Synth: BCH+APE (и др. пары) в одной строке · раскрой строку для ног.'
-              : ' PnL% на OUT по цене входа.'}
+              : ''}
           </Typography.Text>
           {tradeGroupMode === 'none' || !tradeGroups ? (
             renderTradesTable(displayTrades)
@@ -817,7 +873,8 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
                         type="link"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setChartStrategyId(null);
+                          const sid = Number(group.rows[0]?.strategyId || 0) || null;
+                          setChartStrategyId(sid);
                           setChartSymbol(group.key);
                         }}
                       >
@@ -838,6 +895,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
         apiKeyName={apiKeyName}
         symbol={chartSymbol || ''}
         trades={chartSymbolTrades}
+        strategyHint={chartStrategyId ? (strategiesById.get(chartStrategyId) || null) : null}
         onClose={() => {
           setChartSymbol(null);
           setChartStrategyId(null);

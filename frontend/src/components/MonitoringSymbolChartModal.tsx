@@ -1,27 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Collapse, Modal, Spin, Tag, Typography } from 'antd';
+import { Checkbox, Collapse, Modal, Space, Spin, Tag, Typography } from 'antd';
 import axios from 'axios';
 import ChartComponent from './ChartComponent';
 import type { EnrichedMonitoringTradeRow } from '../utils/monitoringTradeEnrichment';
-import { buildStrategyTradeMarkersFromEvents } from '../utils/strategyChartOverlays';
-import type { StrategyTradeEvent } from '../utils/strategyChartOverlays';
+import {
+  buildOpenStrategyChartLayers,
+  buildStrategyTradeMarkersFromEvents,
+  StrategyChartStrategy,
+  StrategyTradeEvent,
+} from '../utils/strategyChartOverlays';
 
 type Props = {
   open: boolean;
   apiKeyName: string;
   symbol: string;
   trades: EnrichedMonitoringTradeRow[];
+  strategyHint?: StrategyChartStrategy | null;
   onClose: () => void;
-};
-
-type StrategyMeta = {
-  id: number;
-  market_mode: 'mono' | 'synthetic';
-  base_symbol: string;
-  quote_symbol: string;
-  base_coef: number;
-  quote_coef: number;
-  interval: string;
 };
 
 const toStrategyEvents = (rows: EnrichedMonitoringTradeRow[]): StrategyTradeEvent[] =>
@@ -38,17 +33,25 @@ const toStrategyEvents = (rows: EnrichedMonitoringTradeRow[]): StrategyTradeEven
     eventOrigin: 'monitoring',
   }));
 
-const mapStrategyRow = (row: Record<string, unknown>): StrategyMeta | null => {
+const mapStrategyRow = (row: Record<string, unknown>): StrategyChartStrategy | null => {
   const id = Number(row.id);
   if (!Number.isFinite(id) || id <= 0) return null;
   return {
     id,
+    name: String(row.name || `strategy-${id}`),
     market_mode: String(row.market_mode || 'mono') === 'synthetic' ? 'synthetic' : 'mono',
     base_symbol: String(row.base_symbol || ''),
     quote_symbol: String(row.quote_symbol || ''),
     base_coef: Number(row.base_coef) || 1,
     quote_coef: Number(row.quote_coef) || 1,
     interval: String(row.interval || '4h'),
+    price_channel_length: Number(row.price_channel_length) || 20,
+    detection_source: String(row.detection_source || 'wick') === 'close' ? 'close' : 'wick',
+    take_profit_percent: Number(row.take_profit_percent) || 0,
+    state: String(row.state || 'flat'),
+    entry_ratio: row.entry_ratio === null || row.entry_ratio === undefined ? null : Number(row.entry_ratio),
+    last_signal: row.last_signal != null ? String(row.last_signal) : null,
+    strategy_type: String(row.strategy_type || ''),
   };
 };
 
@@ -57,18 +60,23 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
   apiKeyName,
   symbol,
   trades,
+  strategyHint = null,
   onClose,
 }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [chartData, setChartData] = useState<unknown[]>([]);
-  const [strategyMeta, setStrategyMeta] = useState<StrategyMeta | null>(null);
+  const [strategyMeta, setStrategyMeta] = useState<StrategyChartStrategy | null>(null);
   const [legCharts, setLegCharts] = useState<Record<string, { loading: boolean; data: unknown[]; error?: string }>>({});
+  const [showStrategyLabel, setShowStrategyLabel] = useState(true);
+  const [showLevels, setShowLevels] = useState(true);
+  const [showTradePath, setShowTradePath] = useState(true);
 
   const primaryStrategyId = useMemo(() => {
+    if (strategyHint?.id) return strategyHint.id;
     const ids = trades.map((t) => Number(t.strategyId || 0)).filter((id) => id > 0);
     return ids[0] || 0;
-  }, [trades]);
+  }, [strategyHint, trades]);
 
   const loadLegChart = useCallback(async (legSymbol: string, interval: string) => {
     if (!apiKeyName || !legSymbol) return;
@@ -105,15 +113,15 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
     setLoading(true);
     setError('');
     setChartData([]);
-    setStrategyMeta(null);
+    setStrategyMeta(strategyHint || null);
     setLegCharts({});
 
     void (async () => {
       try {
-        let meta: StrategyMeta | null = null;
-        if (primaryStrategyId > 0) {
+        let meta: StrategyChartStrategy | null = strategyHint || null;
+        if (!meta && primaryStrategyId > 0) {
           const strategiesRes = await axios.get<unknown[]>(`/api/strategies/${encodeURIComponent(apiKeyName)}`, {
-            timeout: 30_000,
+            timeout: 60_000,
           });
           const rows = Array.isArray(strategiesRes.data) ? strategiesRes.data : [];
           meta = rows
@@ -160,7 +168,7 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
     })();
 
     return () => { cancelled = true; };
-  }, [open, apiKeyName, symbol, primaryStrategyId]);
+  }, [open, apiKeyName, symbol, primaryStrategyId, strategyHint]);
 
   const markerSymbols = useMemo(() => {
     if (strategyMeta?.market_mode === 'synthetic') {
@@ -169,18 +177,40 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
     return symbol ? [symbol] : [];
   }, [strategyMeta, symbol]);
 
-  const markers = useMemo(
-    () => buildStrategyTradeMarkersFromEvents(
+  const layers = useMemo(() => {
+    if (!strategyMeta || chartData.length === 0) {
+      return {
+        overlayLines: [],
+        markers: buildStrategyTradeMarkersFromEvents(
+          toStrategyEvents(trades),
+          markerSymbols,
+          {
+            chartData,
+            markerLimit: 400,
+            strategyId: primaryStrategyId > 0 ? primaryStrategyId : undefined,
+          },
+        ),
+      };
+    }
+    return buildOpenStrategyChartLayers(
+      strategyMeta,
+      chartData,
       toStrategyEvents(trades),
-      markerSymbols,
-      {
-        chartData,
-        markerLimit: 400,
-        strategyId: primaryStrategyId > 0 ? primaryStrategyId : undefined,
-      },
-    ),
-    [chartData, markerSymbols, primaryStrategyId, trades],
-  );
+      [],
+      `mon:${apiKeyName}:${strategyMeta.id}`,
+    );
+  }, [apiKeyName, chartData, markerSymbols, primaryStrategyId, strategyMeta, trades]);
+
+  const overlayLines = useMemo(() => {
+    const lines = layers.overlayLines || [];
+    return lines.filter((line) => {
+      const id = String(line.id || '');
+      const isFlow = id.includes(':flow');
+      const isLevel = !isFlow;
+      if (isFlow) return showTradePath;
+      return showLevels && isLevel;
+    });
+  }, [layers.overlayLines, showLevels, showTradePath]);
 
   const flowHint = useMemo(() => {
     const ins = trades.filter((t) => t.flowType === 'in').length;
@@ -192,6 +222,10 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
   const synthTitle = strategyMeta?.market_mode === 'synthetic'
     ? `${strategyMeta.base_symbol}/${strategyMeta.quote_symbol} (synth)`
     : symbol;
+
+  const strategyTitle = showStrategyLabel && strategyMeta
+    ? `${strategyMeta.name} · ${strategyMeta.strategy_type || 'strategy'} #${strategyMeta.id}`
+    : null;
 
   const legItems = strategyMeta?.market_mode === 'synthetic'
     ? [
@@ -223,7 +257,7 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
 
   return (
     <Modal
-      title={`${synthTitle} · сделки на графике`}
+      title={strategyTitle ? `${synthTitle} · ${strategyTitle}` : `${synthTitle} · сделки на графике`}
       open={open}
       onCancel={onClose}
       footer={null}
@@ -233,19 +267,37 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
       <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
         {flowHint}
         {' · '}
-        {strategyMeta?.market_mode === 'synthetic' ? 'synth ratio chart + legs по запросу' : '4h свечи'}
-        {' · '}
-        маркеры: L/S вход, X выход
+        {strategyMeta?.interval || '4h'}
+        {' свечи · зелёная/красная — ZZ (long/short) или Donchian · фиолетовая SMA · линия сделки IN→OUT'}
       </Typography.Text>
-      {strategyMeta?.market_mode === 'synthetic' ? (
-        <Tag color="purple" style={{ marginBottom: 8 }}>synthetic #{strategyMeta.id}</Tag>
-      ) : null}
+      <Space wrap size={[8, 8]} style={{ marginBottom: 8 }}>
+        <Checkbox checked={showStrategyLabel} onChange={(e) => setShowStrategyLabel(e.target.checked)}>
+          Подпись стратегии
+        </Checkbox>
+        <Checkbox checked={showLevels} onChange={(e) => setShowLevels(e.target.checked)}>
+          Уровни ZZ / канал / MA
+        </Checkbox>
+        <Checkbox checked={showTradePath} onChange={(e) => setShowTradePath(e.target.checked)}>
+          Линия хода сделки
+        </Checkbox>
+        {strategyMeta?.market_mode === 'synthetic' ? (
+          <Tag color="purple">synthetic #{strategyMeta.id}</Tag>
+        ) : null}
+        {strategyMeta?.state && strategyMeta.state !== 'flat' ? (
+          <Tag color={strategyMeta.state === 'long' ? 'green' : 'red'}>{String(strategyMeta.state).toUpperCase()}</Tag>
+        ) : null}
+      </Space>
       {loading ? (
         <div style={{ padding: 32, textAlign: 'center' }}><Spin /></div>
       ) : error ? (
         <Typography.Text type="danger">{error}</Typography.Text>
       ) : chartData.length > 0 ? (
-        <ChartComponent data={chartData} type="candlestick" markers={markers} />
+        <ChartComponent
+          data={chartData}
+          type="candlestick"
+          markers={layers.markers}
+          overlayLines={overlayLines}
+        />
       ) : (
         <Typography.Text type="secondary">Нет данных свечей</Typography.Text>
       )}

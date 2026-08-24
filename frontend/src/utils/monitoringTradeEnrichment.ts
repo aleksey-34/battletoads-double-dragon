@@ -270,6 +270,7 @@ export const groupMonitoringTrades = (
 
   const groups: MonitoringTradeGroup[] = Array.from(buckets.entries()).map(([key, groupRows]) => {
     const pnls = groupRows
+      .filter((r) => r.flowType === 'out')
       .map((r) => r.pnlPercent)
       .filter((v): v is number => v != null && Number.isFinite(v));
     const totalPnl = pnls.length > 0 ? pnls.reduce((s, v) => s + v, 0) : null;
