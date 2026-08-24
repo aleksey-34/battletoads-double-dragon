@@ -341,7 +341,7 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
       {legItems.length > 0 ? (
         <Collapse
           style={{ marginTop: 12 }}
-          defaultActiveKey={[strategyMeta.base_symbol, strategyMeta.quote_symbol].filter(Boolean)}
+          defaultActiveKey={legItems.map((item) => item.key)}
           items={legItems}
           onChange={(keys) => {
             const opened = Array.isArray(keys) ? keys : [keys];
