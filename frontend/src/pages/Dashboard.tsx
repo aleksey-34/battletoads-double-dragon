@@ -1696,6 +1696,7 @@ const Dashboard: React.FC = () => {
       const payload: StrategyTradeEvent[] = raw.map((row: any): StrategyTradeEvent => {
         const tradeType: StrategyTradeEvent['tradeType'] = String(row.tradeType || 'entry') === 'exit' ? 'exit' : 'entry';
         const side: StrategyTradeEvent['side'] = String(row.side || 'long').toLowerCase() === 'short' ? 'short' : 'long';
+        const barTime = Number(row.barTime) || 0;
         return {
           id: Number(row.id),
           strategyId: Number(row.strategyId),
@@ -1704,7 +1705,7 @@ const Dashboard: React.FC = () => {
           symbol: String(row.symbol || '').toUpperCase(),
           price: Number(row.price) || 0,
           qtyUsdt: Number(row.qty) || 0,
-          timestamp: Number(row.timestamp) || 0,
+          timestamp: barTime > 0 ? barTime : Number(row.timestamp) || 0,
           fee: Number(row.fee) || 0,
           eventOrigin: String(row.eventOrigin || ''),
         };

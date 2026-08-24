@@ -43,6 +43,45 @@ export type StrategyTradeEvent = {
   timestamp: number;
   fee?: number;
   eventOrigin?: string;
+  /** Closed-bar time used by runtime (`live_trade_events.entry_time`). */
+  barTime?: number;
+  /** Signal / original entry price (`live_trade_events.entry_price`). */
+  entryPrice?: number | null;
+};
+
+export const mapLiveTradeRowToEvent = (row: Record<string, unknown>): StrategyTradeEvent | null => {
+  const id = Number(row.id);
+  if (!Number.isFinite(id) || id === 0) {
+    return null;
+  }
+  const tradeType = String(row.tradeType || row.trade_type || 'entry') === 'exit' ? 'exit' : 'entry';
+  const side = String(row.side || 'long').toLowerCase() === 'short' ? 'short' : 'long';
+  const barTime = Number(row.barTime ?? row.bar_time ?? 0);
+  const timestamp = Number(row.timestamp ?? row.actual_time ?? 0);
+  const chartTime = barTime > 0 ? barTime : timestamp;
+  if (!(chartTime > 0)) {
+    return null;
+  }
+  const entryPriceRaw = Number(row.entryPrice ?? row.entry_price);
+  return {
+    id,
+    strategyId: Number(row.strategyId ?? row.strategy_id) || 0,
+    tradeType,
+    side,
+    symbol: String(row.symbol || row.source_symbol || '').toUpperCase(),
+    price: Number(row.price ?? row.actual_price) || 0,
+    qtyUsdt: Number(row.qtyUsdt ?? row.qty ?? row.position_size) || 0,
+    timestamp: chartTime,
+    barTime: barTime > 0 ? barTime : undefined,
+    entryPrice: Number.isFinite(entryPriceRaw) && entryPriceRaw > 0 ? entryPriceRaw : null,
+    fee: Number(row.fee ?? row.actual_fee) || 0,
+    eventOrigin: String(row.eventOrigin || row.event_origin || ''),
+  };
+};
+
+export type StrategyChartLayerOptions = {
+  /** `leg` = coin chart of a synth pair: no ratio entry/TP, no ratio PnL. */
+  chartRole?: 'primary' | 'leg';
 };
 
 export type TradeHistoryRow = {
@@ -142,6 +181,173 @@ const toUnixSec = (time: number): number => {
     return 0;
   }
   return numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
+};
+
+type ChartCandle = ParsedCandlePoint & { timeSec: number };
+
+const listChartCandles = (chartData: unknown[]): ChartCandle[] => (
+  chartData
+    .map(parseCandlePoint)
+    .filter((item): item is ParsedCandlePoint => !!item)
+    .map((item) => ({ ...item, timeSec: toUnixSec(item.time) }))
+    .filter((item) => item.timeSec > 0)
+    .sort((a, b) => a.timeSec - b.timeSec)
+);
+
+const eventRawTime = (event: Pick<StrategyTradeEvent, 'timestamp' | 'barTime'>): number => {
+  const bar = Number(event.barTime);
+  if (Number.isFinite(bar) && bar > 0) {
+    return bar;
+  }
+  return Number(event.timestamp) || 0;
+};
+
+/** Snap a fill/signal time onto the candle the strategy actually evaluated. */
+export const snapToChartCandle = (
+  chartData: unknown[],
+  timeLike: number,
+): ChartCandle | null => {
+  const candles = listChartCandles(chartData);
+  if (candles.length === 0) {
+    return null;
+  }
+  const timeSec = toUnixSec(timeLike);
+  if (timeSec <= 0) {
+    return candles[candles.length - 1];
+  }
+  if (timeSec < candles[0].timeSec) {
+    return null;
+  }
+  let best = candles[0];
+  for (const candle of candles) {
+    if (candle.timeSec <= timeSec) {
+      best = candle;
+    } else {
+      break;
+    }
+  }
+  return best;
+};
+
+const alignEventToCandle = (
+  event: StrategyTradeEvent,
+  chartData: unknown[],
+): StrategyTradeEvent | null => {
+  const snap = snapToChartCandle(chartData, eventRawTime(event));
+  if (!snap) {
+    return null;
+  }
+  return {
+    ...event,
+    timestamp: snap.time,
+    barTime: snap.time,
+    price: snap.close,
+  };
+};
+
+/** At most one position change per closed bar — same rule as runtime same-bar guard. */
+export const collapseEventsPerBar = (
+  events: StrategyTradeEvent[],
+  chartData: unknown[],
+): StrategyTradeEvent[] => {
+  const groups = new Map<number, StrategyTradeEvent[]>();
+  for (const event of events) {
+    const aligned = alignEventToCandle(event, chartData);
+    if (!aligned) {
+      continue;
+    }
+    const key = toUnixSec(aligned.timestamp);
+    const list = groups.get(key) || [];
+    list.push(aligned);
+    groups.set(key, list);
+  }
+
+  const out: StrategyTradeEvent[] = [];
+  const bars = Array.from(groups.keys()).sort((a, b) => a - b);
+  for (const bar of bars) {
+    const list = groups.get(bar) || [];
+    const last = list[list.length - 1];
+    if (last) {
+      out.push(last);
+    }
+  }
+  return out;
+};
+
+export const reconstructMissingEntries = (
+  events: StrategyTradeEvent[],
+  chartData: unknown[],
+): StrategyTradeEvent[] => {
+  const candles = listChartCandles(chartData);
+  if (candles.length === 0) {
+    return events;
+  }
+
+  const extras: StrategyTradeEvent[] = [];
+  const exits = events
+    .filter((event) => event.tradeType === 'exit')
+    .sort((a, b) => eventRawTime(a) - eventRawTime(b));
+
+  for (const exit of exits) {
+    const exitSnap = snapToChartCandle(chartData, eventRawTime(exit));
+    if (!exitSnap) {
+      continue;
+    }
+    const known = [...events, ...extras];
+    const entriesBefore = known.filter((event) => {
+      if (event.tradeType !== 'entry' || event.side !== exit.side) {
+        return false;
+      }
+      const snap = snapToChartCandle(chartData, eventRawTime(event));
+      const timeSec = snap ? snap.timeSec : toUnixSec(eventRawTime(event));
+      return timeSec > 0 && timeSec <= exitSnap.timeSec;
+    }).length;
+    const exitsThrough = exits.filter((event) => {
+      if (event.side !== exit.side) {
+        return false;
+      }
+      const snap = snapToChartCandle(chartData, eventRawTime(event));
+      const timeSec = snap ? snap.timeSec : toUnixSec(eventRawTime(event));
+      return timeSec > 0 && timeSec <= exitSnap.timeSec;
+    }).length;
+    if (entriesBefore >= exitsThrough) {
+      continue;
+    }
+
+    const target = Number(exit.entryPrice);
+    if (!(target > 0)) {
+      continue;
+    }
+
+    let best = candles[0];
+    let bestDiff = Number.POSITIVE_INFINITY;
+    for (const candle of candles) {
+      if (candle.timeSec >= exitSnap.timeSec) {
+        break;
+      }
+      const diff = Math.abs(candle.close - target) / target;
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = candle;
+      }
+    }
+
+    extras.push({
+      id: -(Math.abs(exit.id || 1) * 1_000_003 + extras.length + 1),
+      strategyId: exit.strategyId,
+      tradeType: 'entry',
+      side: exit.side,
+      symbol: exit.symbol,
+      price: target,
+      qtyUsdt: exit.qtyUsdt,
+      timestamp: best.time,
+      barTime: best.time,
+      entryPrice: target,
+      eventOrigin: 'reconstructed',
+    });
+  }
+
+  return extras.length > 0 ? [...events, ...extras] : events;
 };
 
 const chartTimeBoundsFromCandles = (chartData: unknown[]): { minSec: number; maxSec: number } | null => {
@@ -253,11 +459,6 @@ export const pairStrategyRoundTrips = (
   return trips;
 };
 
-const eventTimeSec = (event: StrategyTradeEvent): number | null => {
-  const ms = normalizeTimestampMs(event.timestamp);
-  return ms === null ? null : Math.floor(ms / 1000);
-};
-
 const latestCloseFromChart = (chartData: unknown[]): number | null => {
   const candles = chartData
     .map(parseCandlePoint)
@@ -325,37 +526,76 @@ export const buildTradeFlowSummary = (
 
 const MAX_FLOW_TRIPS = 24;
 
+const openEntryFromState = (
+  strategy: StrategyChartStrategy,
+  chartData: unknown[],
+): StrategyTradeEvent | null => {
+  const state = String(strategy.state || 'flat').toLowerCase();
+  if (state !== 'long' && state !== 'short') {
+    return null;
+  }
+  const target = Number(strategy.entry_ratio);
+  if (!(target > 0)) {
+    return null;
+  }
+  const candles = listChartCandles(chartData);
+  if (candles.length === 0) {
+    return null;
+  }
+  let bestDiff = Number.POSITIVE_INFINITY;
+  for (const candle of candles) {
+    const diff = Math.abs(candle.close - target) / target;
+    if (diff < bestDiff) {
+      bestDiff = diff;
+    }
+  }
+  const band = Math.max(bestDiff, 0.015);
+  const near = candles.filter((candle) => Math.abs(candle.close - target) / target <= band + 1e-9);
+  const picked = near[0] || candles[0];
+  return {
+    id: -strategy.id,
+    strategyId: strategy.id,
+    tradeType: 'entry',
+    side: state,
+    symbol: strategy.base_symbol,
+    price: target,
+    qtyUsdt: 0,
+    timestamp: picked.time,
+    barTime: picked.time,
+    entryPrice: target,
+    eventOrigin: 'open-state',
+  };
+};
+
 export const buildTradeFlowLayers = (
   strategy: StrategyChartStrategy,
   events: StrategyTradeEvent[],
   chartData: unknown[],
   idPrefix: string,
-  options?: { maxTrips?: number; forceSnapToCandle?: boolean; symbol?: string },
+  options?: {
+    maxTrips?: number;
+    forceSnapToCandle?: boolean;
+    symbol?: string;
+    hidePnl?: boolean;
+    skipOpenFromState?: boolean;
+  },
 ): { overlayLines: OverlayLine[]; markers: ChartMarker[]; summary: TradeFlowSummary } => {
-  const forceSnap = options?.forceSnapToCandle === true;
-  const summary = buildTradeFlowSummary(strategy, events, chartData, options?.symbol);
-  const displaySymbol = formatStrategyDisplaySymbol(strategy);
+  const forceSnap = options?.forceSnapToCandle !== false;
+  const hidePnl = options?.hidePnl === true;
+  const reconstructed = reconstructMissingEntries(events, chartData);
+  const collapsed = collapseEventsPerBar(reconstructed, chartData);
+  const flowEvents = collapsed.length > 0 ? collapsed : reconstructed;
+  const summary = buildTradeFlowSummary(strategy, flowEvents, chartData, options?.symbol);
   const overlayLines: OverlayLine[] = [];
   const markers: ChartMarker[] = [];
-  const bounds = chartTimeBoundsFromCandles(chartData);
   const maxTrips = Math.max(1, Math.min(80, options?.maxTrips ?? MAX_FLOW_TRIPS));
-  const inBounds = (sec: number) => !bounds || (sec >= bounds.minSec && sec <= bounds.maxSec);
 
-  const state = String(strategy.state || 'flat').toLowerCase();
-  const hasOpenState = state === 'long' || state === 'short';
-  const syntheticOpenFromState: TradeRoundTrip | null = !summary.openTrip && hasOpenState && Number(strategy.entry_ratio) > 0
-    ? {
-      entry: {
-        id: -strategy.id,
-        strategyId: strategy.id,
-        tradeType: 'entry' as const,
-        side: state as 'long' | 'short',
-        symbol: strategy.base_symbol,
-        price: Number(strategy.entry_ratio),
-        qtyUsdt: 0,
-        timestamp: ((bounds?.minSec || Math.floor(Date.now() / 1000) - 86_400) + 60) * 1000,
-      },
-    }
+  const syntheticOpenFromState: TradeRoundTrip | null = !summary.openTrip
+    && options?.skipOpenFromState !== true
+    ? (() => {
+      const entry = openEntryFromState(strategy, chartData);
+      return entry ? { entry } : null;
+    })()
     : null;
 
   const tripsToDraw = [
@@ -364,70 +604,65 @@ export const buildTradeFlowLayers = (
     ...(syntheticOpenFromState ? [syntheticOpenFromState] : []),
   ];
 
-  const pairedExitIds = new Set(
-    summary.roundTrips.map((t) => t.exit?.id).filter((id): id is number => Number.isFinite(id)),
-  );
+  const lastCandle = listChartCandles(chartData).slice(-1)[0] || null;
+  const markerSeen = new Set<string>();
+  const pushMarker = (marker: ChartMarker) => {
+    const key = `${toUnixSec(Number(marker.time))}|${marker.text}`;
+    if (markerSeen.has(key)) {
+      return;
+    }
+    markerSeen.add(key);
+    markers.push(marker);
+  };
 
   tripsToDraw.forEach((trip, index) => {
-    const entrySec = eventTimeSec(trip.entry);
-    if (entrySec === null) {
+    const entrySnap = snapToChartCandle(chartData, eventRawTime(trip.entry));
+    if (!entrySnap) {
       return;
     }
-    const entryPrice = priceOnChartScale(Number(trip.entry.price), chartData, entrySec, forceSnap);
-    if (entryPrice == null) {
-      return;
-    }
-
+    const entryPrice = priceOnChartScale(Number(trip.entry.price), chartData, entrySnap.timeSec, forceSnap)
+      ?? entrySnap.close;
     const isLong = trip.entry.side === 'long';
     const entryColor = isLong ? '#16a34a' : '#dc2626';
-    const entryVisible = inBounds(entrySec);
 
     if (trip.exit && trip.exit.id !== trip.entry.id) {
-      const exitSec = eventTimeSec(trip.exit);
-      if (exitSec === null) {
+      const exitSnap = snapToChartCandle(chartData, eventRawTime(trip.exit));
+      if (!exitSnap) {
         return;
       }
-      const exitPrice = priceOnChartScale(Number(trip.exit.price), chartData, exitSec, forceSnap);
-      if (exitPrice == null) {
-        return;
-      }
+      const exitPrice = priceOnChartScale(Number(trip.exit.price), chartData, exitSnap.timeSec, forceSnap)
+        ?? exitSnap.close;
       const pnl = roundTripPnlPercent(
         { ...trip.entry, price: entryPrice },
         { ...trip.exit, price: exitPrice },
       );
       const flowColor = pnl >= 0 ? '#22c55e' : '#ef4444';
 
-      if (entryVisible || inBounds(exitSec)) {
-        overlayLines.push({
-          id: `${idPrefix}:flow:${index}`,
-          color: flowColor,
-          lineWidth: 2,
-          data: [
-            { time: entrySec, value: entryPrice },
-            { time: exitSec, value: exitPrice },
-          ],
-        });
-      }
-      if (entryVisible) {
-        markers.push({
-          id: `${idPrefix}:in:${trip.entry.id}`,
-          time: entrySec,
-          color: entryColor,
-          shape: isLong ? 'arrowUp' : 'arrowDown',
-          position: isLong ? 'belowBar' : 'aboveBar',
-          text: `IN ${isLong ? 'L' : 'S'}`,
-        });
-      }
-      if (inBounds(exitSec)) {
-        markers.push({
-          id: `${idPrefix}:out:${trip.exit.id}`,
-          time: exitSec,
-          color: flowColor,
-          shape: isLong ? 'arrowDown' : 'arrowUp',
-          position: isLong ? 'aboveBar' : 'belowBar',
-          text: `OUT ${formatPnlPercent(pnl)}`,
-        });
-      }
+      overlayLines.push({
+        id: `${idPrefix}:flow:${index}`,
+        color: flowColor,
+        lineWidth: 2,
+        data: [
+          { time: entrySnap.time, value: entryPrice },
+          { time: exitSnap.time, value: exitPrice },
+        ],
+      });
+      pushMarker({
+        id: `${idPrefix}:in:${trip.entry.id}`,
+        time: entrySnap.time,
+        color: entryColor,
+        shape: isLong ? 'arrowUp' : 'arrowDown',
+        position: isLong ? 'belowBar' : 'aboveBar',
+        text: `IN ${isLong ? 'L' : 'S'}`,
+      });
+      pushMarker({
+        id: `${idPrefix}:out:${trip.exit.id}`,
+        time: exitSnap.time,
+        color: flowColor,
+        shape: isLong ? 'arrowDown' : 'arrowUp',
+        position: isLong ? 'aboveBar' : 'belowBar',
+        text: hidePnl ? 'OUT' : `OUT ${formatPnlPercent(pnl)}`,
+      });
       return;
     }
 
@@ -437,76 +672,46 @@ export const buildTradeFlowLayers = (
 
     const mark = latestCloseFromChart(chartData);
     const upnl = summary.upnlPercent;
-    const lastCandle = chartData
-      .map(parseCandlePoint)
-      .filter((item): item is ParsedCandlePoint => !!item)
-      .sort((a, b) => a.time - b.time)
-      .pop();
-    const markSec = lastCandle ? normalizeOverlayTime(lastCandle.time) : entrySec;
-    const openPrice = priceOnChartScale(entryPrice, chartData, entrySec, forceSnap) ?? entryPrice;
+    const markTime = lastCandle?.time ?? entrySnap.time;
+    const markSec = lastCandle?.timeSec ?? entrySnap.timeSec;
+    const openPrice = priceOnChartScale(entryPrice, chartData, entrySnap.timeSec, forceSnap) ?? entryPrice;
 
-    if (mark !== null && markSec > entrySec) {
+    if (mark !== null && markSec > entrySnap.timeSec) {
       const previewColor = upnl !== null && upnl >= 0 ? '#22c55e' : '#f97316';
       overlayLines.push({
         id: `${idPrefix}:flow-open:${index}`,
         color: previewColor,
         lineWidth: 2,
         data: [
-          { time: entrySec, value: openPrice },
-          { time: markSec, value: mark },
+          { time: entrySnap.time, value: openPrice },
+          { time: markTime, value: mark },
         ],
       });
     }
 
-    if (entryVisible) {
-      markers.push({
-        id: `${idPrefix}:open-in:${trip.entry.id}`,
-        time: entrySec,
-        color: entryColor,
-        shape: isLong ? 'arrowUp' : 'arrowDown',
-        position: isLong ? 'belowBar' : 'aboveBar',
-        text: `IN ${displaySymbol}`,
-      });
-    }
-    if (upnl !== null && inBounds(markSec)) {
-      markers.push({
+    const sameBarAsMark = lastCandle != null && entrySnap.timeSec === lastCandle.timeSec;
+    pushMarker({
+      id: `${idPrefix}:open-in:${trip.entry.id}`,
+      time: entrySnap.time,
+      color: entryColor,
+      shape: isLong ? 'arrowUp' : 'arrowDown',
+      position: isLong ? 'belowBar' : 'aboveBar',
+      text: sameBarAsMark ? `OPEN ${isLong ? 'L' : 'S'}` : `IN ${isLong ? 'L' : 'S'}`,
+    });
+    if (upnl !== null && lastCandle && !sameBarAsMark) {
+      pushMarker({
         id: `${idPrefix}:open-upnl:${trip.entry.id}`,
-        time: markSec,
+        time: lastCandle.time,
         color: upnl >= 0 ? '#16a34a' : '#dc2626',
         shape: 'circle',
         position: 'aboveBar',
-        text: `UPnL ${formatPnlPercent(upnl)}`,
+        text: hidePnl ? 'OPEN' : `OPEN ${formatPnlPercent(upnl)}`,
       });
     }
   });
 
-  for (const event of events) {
-    if (event.tradeType !== 'exit' || pairedExitIds.has(event.id)) {
-      continue;
-    }
-    const exitSec = eventTimeSec(event);
-    if (exitSec === null || !inBounds(exitSec)) {
-      continue;
-    }
-    const exitPrice = priceOnChartScale(Number(event.price), chartData, exitSec, forceSnap);
-    if (exitPrice == null) {
-      continue;
-    }
-    const isLong = event.side === 'long';
-    markers.push({
-      id: `${idPrefix}:orphan-out:${event.id}`,
-      time: exitSec,
-      color: '#d97706',
-      shape: isLong ? 'arrowDown' : 'arrowUp',
-      position: isLong ? 'aboveBar' : 'belowBar',
-      text: 'X',
-    });
-  }
-
   return { overlayLines, markers, summary };
 };
-
-const normalizeOverlayTime = (time: number): number => toUnixSec(time);
 
 const candleCloseAtSec = (chartData: unknown[], timeSec: number): number | null => {
   const candles = chartData
@@ -853,7 +1058,13 @@ export const buildStrategyTradeMarkersFromEvents = (
       if (!symbolSet.has(sym)) {
         return false;
       }
-      const timeSec = normalizeTimestampMs(event.timestamp);
+      const snap = options?.chartData
+        ? snapToChartCandle(options.chartData, eventRawTime(event))
+        : null;
+      if (snap) {
+        return true;
+      }
+      const timeSec = normalizeTimestampMs(eventRawTime(event));
       if (timeSec === null) {
         return false;
       }
@@ -864,11 +1075,19 @@ export const buildStrategyTradeMarkersFromEvents = (
       return true;
     })
     .map((event) => {
-      const timeMs = normalizeTimestampMs(event.timestamp);
-      if (timeMs === null) {
+      const snap = options?.chartData
+        ? snapToChartCandle(options.chartData, eventRawTime(event))
+        : null;
+      const timeSec = snap
+        ? snap.timeSec
+        : (() => {
+          const timeMs = normalizeTimestampMs(event.timestamp);
+          return timeMs === null ? null : Math.floor(timeMs / 1000);
+        })();
+      if (timeSec === null) {
         return null;
       }
-      const timeSec = Math.floor(timeMs / 1000);
+      const markerTime = snap ? snap.time : timeSec;
       const usdtLabel = formatTradeUsdtLabel(Number(event.qtyUsdt));
       const isEntry = event.tradeType === 'entry';
       const isLong = event.side === 'long';
@@ -876,7 +1095,7 @@ export const buildStrategyTradeMarkersFromEvents = (
 
       return {
         id: `lte-${event.id}-${timeSec}`,
-        time: timeSec,
+        time: markerTime,
         color: isEntry ? (isLong ? '#16a34a' : '#dc2626') : '#d97706',
         shape: isBuy ? 'arrowUp' : 'arrowDown',
         position: isBuy ? 'belowBar' : 'aboveBar',
@@ -968,21 +1187,25 @@ export const buildOpenStrategyChartLayers = (
   strategyEvents: StrategyTradeEvent[],
   _exchangeTrades: TradeHistoryRow[],
   idPrefix: string,
+  options?: StrategyChartLayerOptions,
 ): OpenStrategyChartLayers => {
+  const isLeg = options?.chartRole === 'leg';
   const channelLen = strategy.price_channel_length || 20;
-  const zzLevels = isZzPivotChartType(String(strategy.strategy_type || ''))
+  const zzLevels = !isLeg && isZzPivotChartType(String(strategy.strategy_type || ''))
     ? buildZzPivotSnapshot(chartData, channelLen, String(strategy.strategy_type || ''), idPrefix)
     : null;
-  const donchian = zzLevels || buildDonchianSnapshot(
-    chartData,
-    channelLen,
-    strategy.detection_source || 'wick',
-    idPrefix,
-  );
-  const tpWave = zzLevels ? null : buildTpWaveSnapshot(donchian, strategy.take_profit_percent, idPrefix);
+  const donchian = isLeg
+    ? null
+    : (zzLevels || buildDonchianSnapshot(
+      chartData,
+      channelLen,
+      strategy.detection_source || 'wick',
+      idPrefix,
+    ));
+  const tpWave = isLeg || zzLevels ? null : buildTpWaveSnapshot(donchian, strategy.take_profit_percent, idPrefix);
   const sma = buildSmaOverlay(chartData, channelLen, idPrefix);
 
-  const entryRatioValue = strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
+  const entryRatioValue = !isLeg && strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
     ? Number(strategy.entry_ratio)
     : null;
   const entryOverlay = entryRatioValue !== null
@@ -999,7 +1222,8 @@ export const buildOpenStrategyChartLayers = (
         : null
     : null;
 
-  const tpOverlay = strategy.state !== 'flat'
+  const tpOverlay = !isLeg
+    && strategy.state !== 'flat'
     && activeTpRatio !== null
     && Number.isFinite(activeTpRatio)
     ? buildTpOverlay(chartData, `${idPrefix}:tp`, Number(activeTpRatio))
@@ -1008,17 +1232,21 @@ export const buildOpenStrategyChartLayers = (
   const strategyEventsFiltered = strategyEvents.filter((e) => e.strategyId === strategy.id);
   const isSynth = strategy.market_mode === 'synthetic';
   const baseSymbol = String(strategy.base_symbol || '').toUpperCase();
-  const eventsForFlow = isSynth && baseSymbol
+  const eventsForFlow = isLeg
     ? strategyEventsFiltered.filter((e) => String(e.symbol || '').toUpperCase() === baseSymbol)
-    : strategyEventsFiltered;
+    : isSynth && baseSymbol
+      ? strategyEventsFiltered.filter((e) => String(e.symbol || '').toUpperCase() === baseSymbol)
+      : strategyEventsFiltered;
   const flow = buildTradeFlowLayers(
     strategy,
-    eventsForFlow.length > 0 ? eventsForFlow : strategyEventsFiltered,
+    (isLeg || isSynth || eventsForFlow.length > 0) ? eventsForFlow : strategyEventsFiltered,
     chartData,
     idPrefix,
     {
-      forceSnapToCandle: isSynth,
-      symbol: isSynth ? baseSymbol : undefined,
+      forceSnapToCandle: true,
+      symbol: isLeg || isSynth ? baseSymbol : undefined,
+      hidePnl: false,
+      skipOpenFromState: isLeg,
     },
   );
 

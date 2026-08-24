@@ -2129,7 +2129,8 @@ adminRouter.get('/strategy-trades/:apiKeyName', async (req, res) => {
       `SELECT lte.id, lte.strategy_id AS strategyId, lte.trade_type AS tradeType,
               lte.side, lte.source_symbol AS symbol, lte.actual_price AS price,
               lte.position_size AS qty, lte.actual_time AS timestamp,
-              lte.actual_fee AS fee, lte.event_origin AS eventOrigin
+              lte.actual_fee AS fee, lte.event_origin AS eventOrigin,
+              lte.entry_time AS barTime, lte.entry_price AS entryPrice
        FROM live_trade_events lte
        JOIN strategies s ON s.id = lte.strategy_id
        JOIN api_keys a ON a.id = s.api_key_id

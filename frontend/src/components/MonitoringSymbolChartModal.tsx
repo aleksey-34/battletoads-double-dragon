@@ -7,6 +7,7 @@ import { shortStrategyLabel } from '../utils/monitoringTradeEnrichment';
 import {
   buildOpenStrategyChartLayers,
   buildStrategyTradeMarkersFromEvents,
+  mapLiveTradeRowToEvent,
   StrategyChartStrategy,
   StrategyTradeEvent,
 } from '../utils/strategyChartOverlays';
@@ -21,18 +22,24 @@ type Props = {
 };
 
 const toStrategyEvents = (rows: EnrichedMonitoringTradeRow[]): StrategyTradeEvent[] =>
-  rows.map((row) => ({
-    id: row.id,
-    strategyId: Number(row.strategyId || 0),
-    tradeType: row.tradeType,
-    side: row.side,
-    symbol: row.symbol,
-    price: row.price,
-    qtyUsdt: Math.abs(row.price * (row.size || 0)),
-    timestamp: Date.parse(String(row.time || '')),
-    fee: row.fee ?? 0,
-    eventOrigin: 'monitoring',
-  }));
+  rows.map((row) => {
+    const barTime = Number(row.barTime || 0);
+    const fillTime = Date.parse(String(row.time || ''));
+    return {
+      id: row.id,
+      strategyId: Number(row.strategyId || 0),
+      tradeType: row.tradeType,
+      side: row.side,
+      symbol: row.symbol,
+      price: row.price,
+      qtyUsdt: Math.abs(row.price * (row.size || 0)),
+      timestamp: barTime > 0 ? barTime : fillTime,
+      barTime: barTime > 0 ? barTime : undefined,
+      entryPrice: row.entryPrice,
+      fee: row.fee ?? 0,
+      eventOrigin: 'monitoring',
+    };
+  });
 
 const mapStrategyRow = (row: Record<string, unknown>): StrategyChartStrategy | null => {
   const id = Number(row.id);
@@ -72,6 +79,7 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
   const [showStrategyLabel, setShowStrategyLabel] = useState(true);
   const [showLevels, setShowLevels] = useState(true);
   const [showTradePath, setShowTradePath] = useState(true);
+  const [fetchedEvents, setFetchedEvents] = useState<StrategyTradeEvent[]>([]);
 
   const primaryStrategyId = useMemo(() => {
     if (strategyHint?.id) return strategyHint.id;
@@ -87,7 +95,7 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
     }));
     try {
       const res = await axios.get(`/api/market-data/${encodeURIComponent(apiKeyName)}`, {
-        params: { symbol: legSymbol, interval, limit: 320 },
+        params: { symbol: legSymbol, interval, limit: 500 },
         timeout: 55_000,
       });
       setLegCharts((prev) => ({
@@ -115,6 +123,7 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
     setError('');
     setChartData([]);
     setStrategyMeta(strategyHint || null);
+    setFetchedEvents([]);
     setLegCharts({});
 
     void (async () => {
@@ -134,30 +143,42 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
         setStrategyMeta(meta);
 
         const interval = meta?.interval || '4h';
+        const candleLimit = 500;
+        const strategyIdForTrades = meta?.id || primaryStrategyId;
+        const tradesReq = strategyIdForTrades > 0
+          ? axios.get(`/api/strategy-trades/${encodeURIComponent(apiKeyName)}`, {
+            params: { strategyId: strategyIdForTrades, days: 180, limit: 2000 },
+            timeout: 55_000,
+          }).catch(() => ({ data: [] }))
+          : Promise.resolve({ data: [] });
+
         let payload: unknown[] = [];
-        if (meta?.market_mode === 'synthetic' && meta.base_symbol && meta.quote_symbol) {
-          const synthRes = await axios.get(`/api/synthetic-chart/${encodeURIComponent(apiKeyName)}`, {
+        const chartReq = meta?.market_mode === 'synthetic' && meta.base_symbol && meta.quote_symbol
+          ? axios.get(`/api/synthetic-chart/${encodeURIComponent(apiKeyName)}`, {
             params: {
               base: meta.base_symbol,
               quote: meta.quote_symbol,
               baseCoef: meta.base_coef || 1,
               quoteCoef: meta.quote_coef || 1,
               interval,
-              limit: 320,
+              limit: candleLimit,
             },
             timeout: 55_000,
-          });
-          payload = Array.isArray(synthRes.data) ? synthRes.data : [];
-        } else {
-          const monoRes = await axios.get(`/api/market-data/${encodeURIComponent(apiKeyName)}`, {
-            params: { symbol: symbol.split('/')[0] || symbol, interval, limit: 320 },
+          })
+          : axios.get(`/api/market-data/${encodeURIComponent(apiKeyName)}`, {
+            params: { symbol: symbol.split('/')[0] || symbol, interval, limit: candleLimit },
             timeout: 55_000,
           });
-          payload = Array.isArray(monoRes.data) ? monoRes.data : [];
-        }
+
+        const [chartRes, tradesRes] = await Promise.all([chartReq, tradesReq]);
+        payload = Array.isArray(chartRes.data) ? chartRes.data : [];
+        const mappedEvents = (Array.isArray(tradesRes.data) ? tradesRes.data : [])
+          .map((row: Record<string, unknown>) => mapLiveTradeRowToEvent(row))
+          .filter((row: StrategyTradeEvent | null): row is StrategyTradeEvent => !!row);
 
         if (!cancelled) {
           setChartData(payload);
+          setFetchedEvents(mappedEvents);
         }
 
         if (meta?.market_mode === 'synthetic' && meta.base_symbol && meta.quote_symbol) {
@@ -183,7 +204,12 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
     return symbol ? [symbol] : [];
   }, [strategyMeta, symbol]);
 
-  const strategyEvents = useMemo(() => toStrategyEvents(trades), [trades]);
+  const strategyEvents = useMemo(() => {
+    if (fetchedEvents.length > 0) {
+      return fetchedEvents;
+    }
+    return toStrategyEvents(trades);
+  }, [fetchedEvents, trades]);
 
   const layers = useMemo(() => {
     if (!strategyMeta || chartData.length === 0) {
@@ -206,6 +232,7 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
       strategyEvents,
       [],
       `mon:${apiKeyName}:${strategyMeta.id}`,
+      { chartRole: 'primary' },
     );
   }, [apiKeyName, chartData, markerSymbols, primaryStrategyId, strategyEvents, strategyMeta]);
 
@@ -221,11 +248,20 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
   }, [layers.overlayLines, showLevels, showTradePath]);
 
   const flowHint = useMemo(() => {
+    const summary = layers.summary;
+    if (summary) {
+      const closed = summary.roundTrips.length;
+      const open = summary.openTrip ? 1 : 0;
+      const openBit = open ? ' · OPEN' : '';
+      const upnl = summary.upnlPercent != null
+        ? ` · UPnL ${summary.upnlPercent > 0 ? '+' : ''}${summary.upnlPercent.toFixed(1)}%`
+        : '';
+      return `${closed} круг(ов)${openBit}${upnl}`;
+    }
     const ins = trades.filter((t) => t.flowType === 'in').length;
     const outs = trades.filter((t) => t.flowType === 'out').length;
-    const revs = trades.filter((t) => t.flowType === 'reverse').length;
-    return `IN ${ins} · OUT ${outs} · REV ${revs}`;
-  }, [trades]);
+    return `IN ${ins} · OUT ${outs}`;
+  }, [layers.summary, trades]);
 
   const synthTitle = strategyMeta?.market_mode === 'synthetic'
     ? `${strategyMeta.base_symbol}/${strategyMeta.quote_symbol} (synth)`
@@ -247,11 +283,12 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
       const legLayers = !leg?.data?.length
         ? { overlayLines: [], markers: [] }
         : buildOpenStrategyChartLayers(
-          { ...strategyMeta, market_mode: 'mono', base_symbol: legSymbol, quote_symbol: '' },
+          { ...strategyMeta, market_mode: 'mono', base_symbol: legSymbol, quote_symbol: '', state: 'flat', entry_ratio: null },
           leg.data,
           legEvents,
           [],
           `mon-leg:${apiKeyName}:${strategyMeta.id}:${legSymbol}`,
+          { chartRole: 'leg' },
         );
       return {
         key: legSymbol,
@@ -305,7 +342,7 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
         {flowHint}
         {' · '}
         {strategyMeta?.interval || '4h'}
-        {' свечи · зелёная/красная — ZZ (long/short) или Donchian · фиолетовая SMA · линия сделки IN→OUT'}
+        {' свечи · маркеры на закрытом баре (как runtime/BT) · ZZ/Donchian + SMA · линия IN→OUT'}
       </Typography.Text>
       <Space wrap size={[8, 8]} style={{ marginBottom: 8 }}>
         <Checkbox checked={showStrategyLabel} onChange={(e) => setShowStrategyLabel(e.target.checked)}>

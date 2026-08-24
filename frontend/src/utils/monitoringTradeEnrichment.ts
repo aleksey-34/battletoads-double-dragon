@@ -12,6 +12,8 @@ export type SynthStrategyMeta = {
   id: number;
   baseSymbol: string;
   quoteSymbol: string;
+  baseCoef: number;
+  quoteCoef: number;
 };
 
 export type DisplayMonitoringTradeRow = EnrichedMonitoringTradeRow & {
@@ -38,7 +40,13 @@ export const buildSynthStrategyMap = (
     const baseSymbol = String(row.base_symbol || '').toUpperCase();
     const quoteSymbol = String(row.quote_symbol || '').toUpperCase();
     if (!baseSymbol || !quoteSymbol) continue;
-    out.set(id, { id, baseSymbol, quoteSymbol });
+    out.set(id, {
+      id,
+      baseSymbol,
+      quoteSymbol,
+      baseCoef: Number(row.base_coef) > 0 ? Number(row.base_coef) : 1,
+      quoteCoef: Number(row.quote_coef) > 0 ? Number(row.quote_coef) : 1,
+    });
   }
   return out;
 };
@@ -95,19 +103,16 @@ export const collapseSynthTradeLegs = (
     const hasBothLegs = symbols.has(meta.baseSymbol) && symbols.has(meta.quoteSymbol);
 
     if (hasBothLegs && sortedLegs.length >= 2) {
-      const pnls = sortedLegs
-        .map((l) => l.pnlPercent)
-        .filter((v): v is number => v != null && Number.isFinite(v));
-      const pnlPercent = pnls.length > 0
-        ? pnls.reduce((sum, v) => sum + v, 0) / pnls.length
-        : sortedLegs[0].pnlPercent;
+      const baseLeg = sortedLegs.find((l) => String(l.symbol).toUpperCase() === meta.baseSymbol)
+        || sortedLegs[0];
       grouped.push({
-        ...sortedLegs[0],
+        ...baseLeg,
         symbol: pairLabel,
+        side: baseLeg.side,
         synthGrouped: true,
         synthPairLabel: pairLabel,
         synthLegs: sortedLegs,
-        pnlPercent,
+        pnlPercent: synthGroupedPnlPercent(sortedLegs, meta, baseLeg.side),
       });
     } else {
       grouped.push(...sortedLegs.map((row) => ({
@@ -125,23 +130,71 @@ export const collapseSynthTradeLegs = (
 const positionKey = (row: MonitoringTradeRow): string =>
   `${Number(row.strategyId || 0)}::${String(row.symbol || '').toUpperCase()}`;
 
+/** Same instrument (ratio↔ratio or coin↔coin). Ratio vs coin fill is ~2–3× and must not count. */
+export const pricesOnSameScale = (left: number, right: number): boolean => {
+  if (!(left > 0) || !(right > 0)) {
+    return false;
+  }
+  const ratio = left / right;
+  return ratio >= 0.5 && ratio <= 2;
+};
+
+export const synthRatioFromCoins = (
+  basePrice: number,
+  quotePrice: number,
+  baseCoef = 1,
+  quoteCoef = 1,
+): number | null => {
+  const b = Number(baseCoef) > 0 ? Number(baseCoef) : 1;
+  const q = Number(quoteCoef) > 0 ? Number(quoteCoef) : 1;
+  if (!(basePrice > 0) || !(quotePrice > 0)) {
+    return null;
+  }
+  return (b * basePrice) / (q * quotePrice);
+};
+
 export const calcTradePnlPercent = (
   side: 'long' | 'short',
   entryPrice: number,
   exitPrice: number,
 ): number | null => {
-  if (!Number.isFinite(entryPrice) || !Number.isFinite(exitPrice) || entryPrice <= 0 || exitPrice <= 0) {
-    return null;
-  }
-  // Synth fills mix ratio vs coin price — ignore incomparable scales.
-  const ratio = entryPrice / exitPrice;
-  if (ratio > 4 || ratio < 0.25) {
+  if (!pricesOnSameScale(entryPrice, exitPrice)) {
     return null;
   }
   if (side === 'long') {
     return ((exitPrice / entryPrice) - 1) * 100;
   }
   return ((entryPrice / exitPrice) - 1) * 100;
+};
+
+const synthGroupedPnlPercent = (
+  legs: EnrichedMonitoringTradeRow[],
+  meta: SynthStrategyMeta,
+  signalSide: 'long' | 'short',
+): number | null => {
+  if (legs.some((leg) => leg.flowType !== 'out')) {
+    return null;
+  }
+  const baseLeg = legs.find((leg) => String(leg.symbol).toUpperCase() === meta.baseSymbol);
+  const quoteLeg = legs.find((leg) => String(leg.symbol).toUpperCase() === meta.quoteSymbol);
+  const entryRatio = legs
+    .map((leg) => Number(leg.entryPrice))
+    .find((value) => value > 0) ?? null;
+  if (entryRatio == null || !baseLeg) {
+    return null;
+  }
+  const reconstructed = quoteLeg
+    ? synthRatioFromCoins(baseLeg.price, quoteLeg.price, meta.baseCoef, meta.quoteCoef)
+    : null;
+  const exitRatio = reconstructed != null && pricesOnSameScale(entryRatio, reconstructed)
+    ? reconstructed
+    : pricesOnSameScale(entryRatio, baseLeg.price)
+      ? baseLeg.price
+      : null;
+  if (exitRatio == null) {
+    return null;
+  }
+  return calcTradePnlPercent(signalSide, entryRatio, exitRatio);
 };
 
 export const pnlBucket = (pnlPercent: number | null): MonitoringPnlBucket => {
@@ -181,7 +234,10 @@ export const shortStrategyLabel = (strategyType?: string, strategyName?: string)
 };
 
 /** Chronological enrichment: IN / OUT / REVERSE + round-trip PnL% on exits. */
-export const enrichMonitoringTrades = (rows: MonitoringTradeRow[]): EnrichedMonitoringTradeRow[] => {
+export const enrichMonitoringTrades = (
+  rows: MonitoringTradeRow[],
+  synthById?: Map<number, SynthStrategyMeta>,
+): EnrichedMonitoringTradeRow[] => {
   if (!Array.isArray(rows) || rows.length === 0) {
     return [];
   }
@@ -201,14 +257,22 @@ export const enrichMonitoringTrades = (rows: MonitoringTradeRow[]): EnrichedMoni
       : null;
 
     if (row.tradeType === 'exit') {
-      const refEntry = dbEntry ?? open.get(key)?.entryPrice ?? null;
+      const synth = synthById?.get(Number(row.strategyId || 0));
+      const symbol = String(row.symbol || '').toUpperCase();
+      const isSynthLeg = Boolean(
+        synth && (symbol === synth.baseSymbol || symbol === synth.quoteSymbol),
+      );
+      // Runtime stores entry_price as the synth ratio on both legs — that is not the coin fill.
+      const refEntry = isSynthLeg
+        ? (open.get(key)?.entryPrice ?? null)
+        : (dbEntry ?? open.get(key)?.entryPrice ?? null);
       const pnlPercent = refEntry != null
         ? calcTradePnlPercent(row.side, refEntry, row.price)
         : null;
       enriched.push({
         ...row,
         flowType: 'out',
-        entryPrice: refEntry,
+        entryPrice: dbEntry ?? refEntry,
         pnlPercent,
       });
       open.delete(key);

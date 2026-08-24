@@ -464,6 +464,8 @@ export type MonitoringTradeRow = {
   time: string;
   strategyId: number | null;
   entryPrice: number | null;
+  /** Closed-bar time from live_trade_events.entry_time (ms). */
+  barTime: number | null;
 };
 
 export const getMonitoringTrades = async (
@@ -495,6 +497,7 @@ export const getMonitoringTrades = async (
          lte.actual_time,
          lte.strategy_id,
          lte.entry_price,
+         lte.entry_time,
          s.base_symbol,
          s.quote_symbol
        FROM live_trade_events lte
@@ -513,6 +516,7 @@ export const getMonitoringTrades = async (
          efe.actual_time,
          NULL AS strategy_id,
          NULL AS entry_price,
+         NULL AS entry_time,
          efe.source_symbol AS base_symbol,
          NULL AS quote_symbol
        FROM mon.exchange_fill_events efe
@@ -533,6 +537,7 @@ export const getMonitoringTrades = async (
     actual_time?: number;
     strategy_id?: number;
     entry_price?: number;
+    entry_time?: number;
     base_symbol?: string;
     quote_symbol?: string;
   }>;
@@ -566,6 +571,9 @@ export const getMonitoringTrades = async (
         strategyId: row.strategy_id != null ? toFiniteNumber(row.strategy_id, 0) : null,
         entryPrice: row.entry_price != null && toFiniteNumber(row.entry_price, 0) > 0
           ? toFiniteNumber(row.entry_price, 0)
+          : null,
+        barTime: row.entry_time != null && toFiniteNumber(row.entry_time, 0) > 0
+          ? toFiniteNumber(row.entry_time, 0)
           : null,
       };
     })

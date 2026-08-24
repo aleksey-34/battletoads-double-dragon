@@ -58,6 +58,8 @@ export type MonitoringTradeRow = {
   strategyId: number | null;
   /** Original entry price stored on exit rows (live_trade_events.entry_price). */
   entryPrice?: number | null;
+  /** Closed-bar time from live_trade_events.entry_time (ms). */
+  barTime?: number | null;
 };
 
 export type MonitoringTradeFrequencyPoint = {
@@ -264,7 +266,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     return () => { cancelled = true; };
   }, [apiKeyName]);
 
-  const enrichedTrades = useMemo(() => enrichMonitoringTrades(trades), [trades]);
+  const enrichedTrades = useMemo(() => enrichMonitoringTrades(trades, synthById), [synthById, trades]);
   const displayTrades = useMemo(
     () => collapseSynthTradeLegs(enrichedTrades, synthById, groupSynthLegs),
     [enrichedTrades, groupSynthLegs, synthById],
@@ -847,9 +849,9 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
           </Space>
           <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
             IN — вход · OUT — выход · REV — переворот.
-            PnL% только на OUT (вход без цены закрытия — не 0%).
+            PnL% только на OUT: у синта — как на синтчарте (ratio), у ног после раскрытия — по монете.
             {synthById.size > 0
-              ? ' Synth: BCH+APE (и др. пары) в одной строке · раскрой строку для ног.'
+              ? ' Synth: пара в одной строке · раскрой для ног.'
               : ''}
           </Typography.Text>
           {tradeGroupMode === 'none' || !tradeGroups ? (

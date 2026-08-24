@@ -4,6 +4,7 @@ import axios from 'axios';
 import ChartComponent from './ChartComponent';
 import {
   buildOpenStrategyChartLayers,
+  mapLiveTradeRowToEvent,
   StrategyChartStrategy,
   StrategyTradeEvent,
   TradeHistoryRow,
@@ -51,24 +52,9 @@ const mapStrategyRow = (row: Record<string, unknown>): StrategyChartStrategy => 
   strategy_type: row.strategy_type != null ? String(row.strategy_type) : '',
 });
 
-const mapStrategyTradeEvent = (row: Record<string, unknown>): StrategyTradeEvent | null => {
-  const id = Number(row.id);
-  if (!Number.isFinite(id) || id <= 0) {
-    return null;
-  }
-  return {
-    id,
-    strategyId: Number(row.strategyId),
-    tradeType: String(row.tradeType || 'entry') === 'exit' ? 'exit' : 'entry',
-    side: String(row.side || 'long').toLowerCase() === 'short' ? 'short' : 'long',
-    symbol: String(row.symbol || '').toUpperCase(),
-    price: Number(row.price) || 0,
-    qtyUsdt: Number(row.qty) || 0,
-    timestamp: Number(row.timestamp) || 0,
-    fee: Number(row.fee) || 0,
-    eventOrigin: String(row.eventOrigin || ''),
-  };
-};
+const mapStrategyTradeEvent = (row: Record<string, unknown>): StrategyTradeEvent | null => (
+  mapLiveTradeRowToEvent(row)
+);
 
 const strategyLabel = (strategy: StrategyChartStrategy): string => {
   const pair = strategy.market_mode === 'synthetic'
