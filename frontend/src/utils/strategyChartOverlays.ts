@@ -343,7 +343,7 @@ export const buildTradeFlowLayers = (
 
   const state = String(strategy.state || 'flat').toLowerCase();
   const hasOpenState = state === 'long' || state === 'short';
-  const syntheticOpenFromState = !summary.openTrip && hasOpenState && Number(strategy.entry_ratio) > 0
+  const syntheticOpenFromState: TradeRoundTrip | null = !summary.openTrip && hasOpenState && Number(strategy.entry_ratio) > 0
     ? {
       entry: {
         id: -strategy.id,
@@ -354,7 +354,7 @@ export const buildTradeFlowLayers = (
         price: Number(strategy.entry_ratio),
         qtyUsdt: 0,
         timestamp: ((bounds?.minSec || Math.floor(Date.now() / 1000) - 86_400) + 60) * 1000,
-      } as StrategyTradeEvent,
+      },
     }
     : null;
 
