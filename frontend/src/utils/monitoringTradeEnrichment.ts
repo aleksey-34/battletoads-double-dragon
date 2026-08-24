@@ -133,6 +133,11 @@ export const calcTradePnlPercent = (
   if (!Number.isFinite(entryPrice) || !Number.isFinite(exitPrice) || entryPrice <= 0 || exitPrice <= 0) {
     return null;
   }
+  // Synth fills mix ratio vs coin price — ignore incomparable scales.
+  const ratio = entryPrice / exitPrice;
+  if (ratio > 4 || ratio < 0.25) {
+    return null;
+  }
   if (side === 'long') {
     return ((exitPrice / entryPrice) - 1) * 100;
   }
@@ -159,6 +164,20 @@ export const flowTypeLabel: Record<MonitoringFlowType, string> = {
   in: 'IN',
   out: 'OUT',
   reverse: 'REV',
+};
+
+/** Short label for the trade list: zz_breakout, not SAAS::key::MONO::... */
+export const shortStrategyLabel = (strategyType?: string, strategyName?: string): string => {
+  const type = String(strategyType || '').trim();
+  if (type) {
+    return type;
+  }
+  const name = String(strategyName || '').trim();
+  const parts = name.split('::').map((p) => p.trim()).filter(Boolean);
+  const typed = [...parts].reverse().find((part) => (
+    /^(ZZ_|zz_|MeanReversion|DD_|CT_|momentum|stat_arb|hideep)/i.test(part)
+  ));
+  return typed || name || '—';
 };
 
 /** Chronological enrichment: IN / OUT / REVERSE + round-trip PnL% on exits. */

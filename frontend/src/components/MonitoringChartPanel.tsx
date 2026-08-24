@@ -11,6 +11,7 @@ import {
   collapseSynthTradeLegs,
   enrichMonitoringTrades,
   SynthStrategyMeta,
+  shortStrategyLabel,
   flowTypeLabel,
   groupMonitoringTrades,
   pnlBucketLabel,
@@ -537,7 +538,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
         }
         return (
           <span title={`${meta.name} · ${meta.strategy_type} #${meta.id}`}>
-            {meta.name}
+            {shortStrategyLabel(meta.strategy_type, meta.name)}
           </span>
         );
       },

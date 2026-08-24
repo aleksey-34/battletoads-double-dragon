@@ -136,26 +136,38 @@ const formatTradeUsdtLabel = (usdt: number): string => {
   return `${usdt.toFixed(1)}$`;
 };
 
+const toUnixSec = (time: number): number => {
+  const numeric = Number(time);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  return numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
+};
+
 const chartTimeBoundsFromCandles = (chartData: unknown[]): { minSec: number; maxSec: number } | null => {
   if (!Array.isArray(chartData) || chartData.length === 0) {
     return null;
   }
-  let minMs = Number.POSITIVE_INFINITY;
-  let maxMs = 0;
+  let minSec = Number.POSITIVE_INFINITY;
+  let maxSec = 0;
   chartData.forEach((point) => {
     const parsed = parseCandlePoint(point);
     if (!parsed) {
       return;
     }
-    minMs = Math.min(minMs, parsed.time);
-    maxMs = Math.max(maxMs, parsed.time);
+    const sec = toUnixSec(parsed.time);
+    if (sec <= 0) {
+      return;
+    }
+    minSec = Math.min(minSec, sec);
+    maxSec = Math.max(maxSec, sec);
   });
-  if (!Number.isFinite(minMs) || maxMs <= 0) {
+  if (!Number.isFinite(minSec) || maxSec <= 0) {
     return null;
   }
   return {
-    minSec: Math.floor(minMs / 1000) - 120,
-    maxSec: Math.floor(maxMs / 1000) + 120,
+    minSec: minSec - 120,
+    maxSec: maxSec + 120,
   };
 };
 
@@ -204,9 +216,15 @@ export const roundTripPnlPercent = (entry: StrategyTradeEvent, exit: StrategyTra
   return ((ep - xp) / ep) * 100;
 };
 
-export const pairStrategyRoundTrips = (events: StrategyTradeEvent[], strategyId?: number): TradeRoundTrip[] => {
+export const pairStrategyRoundTrips = (
+  events: StrategyTradeEvent[],
+  strategyId?: number,
+  symbol?: string,
+): TradeRoundTrip[] => {
+  const wantSymbol = symbol ? String(symbol).toUpperCase() : '';
   const sorted = [...events]
     .filter((e) => (strategyId === undefined || e.strategyId === strategyId))
+    .filter((e) => !wantSymbol || String(e.symbol || '').toUpperCase() === wantSymbol)
     .sort((a, b) => a.timestamp - b.timestamp);
 
   const openEntries: StrategyTradeEvent[] = [];
@@ -257,7 +275,9 @@ export const computeOpenUpnlPercent = (
   openEntry: StrategyTradeEvent | undefined,
   chartData: unknown[],
 ): number | null => {
-  const entryPrice = Number(openEntry?.price ?? strategy.entry_ratio);
+  const entryPrice = Number(strategy.entry_ratio) > 0
+    ? Number(strategy.entry_ratio)
+    : Number(openEntry?.price);
   const mark = latestCloseFromChart(chartData);
   if (!Number.isFinite(entryPrice) || entryPrice <= 0 || mark === null) {
     return null;
@@ -276,15 +296,29 @@ export const buildTradeFlowSummary = (
   strategy: StrategyChartStrategy,
   events: StrategyTradeEvent[],
   chartData: unknown[],
+  symbol?: string,
 ): TradeFlowSummary => {
-  const trips = pairStrategyRoundTrips(events, strategy.id);
+  const trips = pairStrategyRoundTrips(events, strategy.id, symbol);
   const completed = trips.filter((t) => t.exit);
   const openCandidates = trips.filter((t) => !t.exit);
   const openTrip = openCandidates.length > 0 ? openCandidates[openCandidates.length - 1] : undefined;
+  const entryForUpnl = openTrip?.entry
+    || (strategy.entry_ratio != null && Number(strategy.entry_ratio) > 0
+      ? {
+        id: -1,
+        strategyId: strategy.id,
+        tradeType: 'entry' as const,
+        side: (String(strategy.state).toLowerCase() === 'short' ? 'short' : 'long') as 'long' | 'short',
+        symbol: strategy.base_symbol,
+        price: Number(strategy.entry_ratio),
+        qtyUsdt: 0,
+        timestamp: Date.now(),
+      }
+      : undefined);
   return {
     roundTrips: completed.slice(-40),
     openTrip,
-    upnlPercent: computeOpenUpnlPercent(strategy, openTrip?.entry, chartData),
+    upnlPercent: computeOpenUpnlPercent(strategy, entryForUpnl, chartData),
     lastSignal: String(strategy.last_signal || '').trim() || '—',
   };
 };
@@ -296,72 +330,111 @@ export const buildTradeFlowLayers = (
   events: StrategyTradeEvent[],
   chartData: unknown[],
   idPrefix: string,
-  options?: { maxTrips?: number },
+  options?: { maxTrips?: number; forceSnapToCandle?: boolean; symbol?: string },
 ): { overlayLines: OverlayLine[]; markers: ChartMarker[]; summary: TradeFlowSummary } => {
-  const summary = buildTradeFlowSummary(strategy, events, chartData);
+  const forceSnap = options?.forceSnapToCandle === true;
+  const summary = buildTradeFlowSummary(strategy, events, chartData, options?.symbol);
   const displaySymbol = formatStrategyDisplaySymbol(strategy);
   const overlayLines: OverlayLine[] = [];
   const markers: ChartMarker[] = [];
   const bounds = chartTimeBoundsFromCandles(chartData);
   const maxTrips = Math.max(1, Math.min(80, options?.maxTrips ?? MAX_FLOW_TRIPS));
+  const inBounds = (sec: number) => !bounds || (sec >= bounds.minSec && sec <= bounds.maxSec);
+
+  const state = String(strategy.state || 'flat').toLowerCase();
+  const hasOpenState = state === 'long' || state === 'short';
+  const syntheticOpenFromState = !summary.openTrip && hasOpenState && Number(strategy.entry_ratio) > 0
+    ? {
+      entry: {
+        id: -strategy.id,
+        strategyId: strategy.id,
+        tradeType: 'entry' as const,
+        side: state as 'long' | 'short',
+        symbol: strategy.base_symbol,
+        price: Number(strategy.entry_ratio),
+        qtyUsdt: 0,
+        timestamp: ((bounds?.minSec || Math.floor(Date.now() / 1000) - 86_400) + 60) * 1000,
+      } as StrategyTradeEvent,
+    }
+    : null;
 
   const tripsToDraw = [
     ...summary.roundTrips.slice(-maxTrips),
     ...(summary.openTrip ? [summary.openTrip] : []),
+    ...(syntheticOpenFromState ? [syntheticOpenFromState] : []),
   ];
+
+  const pairedExitIds = new Set(
+    summary.roundTrips.map((t) => t.exit?.id).filter((id): id is number => Number.isFinite(id)),
+  );
 
   tripsToDraw.forEach((trip, index) => {
     const entrySec = eventTimeSec(trip.entry);
-    const entryPrice = Number(trip.entry.price);
-    if (entrySec === null || !Number.isFinite(entryPrice) || entryPrice <= 0) {
+    if (entrySec === null) {
       return;
     }
-    if (bounds && (entrySec < bounds.minSec || entrySec > bounds.maxSec)) {
+    const entryPrice = priceOnChartScale(Number(trip.entry.price), chartData, entrySec, forceSnap);
+    if (entryPrice == null) {
       return;
     }
 
     const isLong = trip.entry.side === 'long';
     const entryColor = isLong ? '#16a34a' : '#dc2626';
+    const entryVisible = inBounds(entrySec);
 
-    if (trip.exit) {
+    if (trip.exit && trip.exit.id !== trip.entry.id) {
       const exitSec = eventTimeSec(trip.exit);
-      const exitPrice = Number(trip.exit.price);
-      if (exitSec === null || !Number.isFinite(exitPrice) || exitPrice <= 0) {
+      if (exitSec === null) {
         return;
       }
-      const pnl = roundTripPnlPercent(trip.entry, trip.exit);
+      const exitPrice = priceOnChartScale(Number(trip.exit.price), chartData, exitSec, forceSnap);
+      if (exitPrice == null) {
+        return;
+      }
+      const pnl = roundTripPnlPercent(
+        { ...trip.entry, price: entryPrice },
+        { ...trip.exit, price: exitPrice },
+      );
       const flowColor = pnl >= 0 ? '#22c55e' : '#ef4444';
 
-      overlayLines.push({
-        id: `${idPrefix}:flow:${index}`,
-        color: flowColor,
-        lineWidth: 2,
-        data: [
-          { time: entrySec, value: entryPrice },
-          { time: exitSec, value: exitPrice },
-        ],
-      });
-
-      markers.push({
-        id: `${idPrefix}:in:${trip.entry.id}`,
-        time: entrySec,
-        color: entryColor,
-        shape: isLong ? 'arrowUp' : 'arrowDown',
-        position: isLong ? 'belowBar' : 'aboveBar',
-        text: `IN ${isLong ? 'L' : 'S'}`,
-      });
-      markers.push({
-        id: `${idPrefix}:out:${trip.exit.id}`,
-        time: exitSec,
-        color: flowColor,
-        shape: isLong ? 'arrowDown' : 'arrowUp',
-        position: isLong ? 'aboveBar' : 'belowBar',
-        text: `OUT ${formatPnlPercent(pnl)}`,
-      });
+      if (entryVisible || inBounds(exitSec)) {
+        overlayLines.push({
+          id: `${idPrefix}:flow:${index}`,
+          color: flowColor,
+          lineWidth: 2,
+          data: [
+            { time: entrySec, value: entryPrice },
+            { time: exitSec, value: exitPrice },
+          ],
+        });
+      }
+      if (entryVisible) {
+        markers.push({
+          id: `${idPrefix}:in:${trip.entry.id}`,
+          time: entrySec,
+          color: entryColor,
+          shape: isLong ? 'arrowUp' : 'arrowDown',
+          position: isLong ? 'belowBar' : 'aboveBar',
+          text: `IN ${isLong ? 'L' : 'S'}`,
+        });
+      }
+      if (inBounds(exitSec)) {
+        markers.push({
+          id: `${idPrefix}:out:${trip.exit.id}`,
+          time: exitSec,
+          color: flowColor,
+          shape: isLong ? 'arrowDown' : 'arrowUp',
+          position: isLong ? 'aboveBar' : 'belowBar',
+          text: `OUT ${formatPnlPercent(pnl)}`,
+        });
+      }
       return;
     }
 
-    // Open leg — arrow to current mark (UPnL preview)
+    if (trip.exit && trip.exit.id === trip.entry.id) {
+      return;
+    }
+
     const mark = latestCloseFromChart(chartData);
     const upnl = summary.upnlPercent;
     const lastCandle = chartData
@@ -370,6 +443,7 @@ export const buildTradeFlowLayers = (
       .sort((a, b) => a.time - b.time)
       .pop();
     const markSec = lastCandle ? normalizeOverlayTime(lastCandle.time) : entrySec;
+    const openPrice = priceOnChartScale(entryPrice, chartData, entrySec, forceSnap) ?? entryPrice;
 
     if (mark !== null && markSec > entrySec) {
       const previewColor = upnl !== null && upnl >= 0 ? '#22c55e' : '#f97316';
@@ -378,21 +452,23 @@ export const buildTradeFlowLayers = (
         color: previewColor,
         lineWidth: 2,
         data: [
-          { time: entrySec, value: entryPrice },
+          { time: entrySec, value: openPrice },
           { time: markSec, value: mark },
         ],
       });
     }
 
-    markers.push({
-      id: `${idPrefix}:open-in:${trip.entry.id}`,
-      time: entrySec,
-      color: entryColor,
-      shape: isLong ? 'arrowUp' : 'arrowDown',
-      position: isLong ? 'belowBar' : 'aboveBar',
-      text: `IN ${displaySymbol} @ ${entryPrice.toFixed(4)}`,
-    });
-    if (upnl !== null) {
+    if (entryVisible) {
+      markers.push({
+        id: `${idPrefix}:open-in:${trip.entry.id}`,
+        time: entrySec,
+        color: entryColor,
+        shape: isLong ? 'arrowUp' : 'arrowDown',
+        position: isLong ? 'belowBar' : 'aboveBar',
+        text: `IN ${displaySymbol}`,
+      });
+    }
+    if (upnl !== null && inBounds(markSec)) {
       markers.push({
         id: `${idPrefix}:open-upnl:${trip.entry.id}`,
         time: markSec,
@@ -404,15 +480,74 @@ export const buildTradeFlowLayers = (
     }
   });
 
+  for (const event of events) {
+    if (event.tradeType !== 'exit' || pairedExitIds.has(event.id)) {
+      continue;
+    }
+    const exitSec = eventTimeSec(event);
+    if (exitSec === null || !inBounds(exitSec)) {
+      continue;
+    }
+    const exitPrice = priceOnChartScale(Number(event.price), chartData, exitSec, forceSnap);
+    if (exitPrice == null) {
+      continue;
+    }
+    const isLong = event.side === 'long';
+    markers.push({
+      id: `${idPrefix}:orphan-out:${event.id}`,
+      time: exitSec,
+      color: '#d97706',
+      shape: isLong ? 'arrowDown' : 'arrowUp',
+      position: isLong ? 'aboveBar' : 'belowBar',
+      text: 'X',
+    });
+  }
+
   return { overlayLines, markers, summary };
 };
 
-const normalizeOverlayTime = (time: number): number => {
-  const numeric = Number(time);
-  if (!Number.isFinite(numeric)) {
-    return 0;
+const normalizeOverlayTime = (time: number): number => toUnixSec(time);
+
+const candleCloseAtSec = (chartData: unknown[], timeSec: number): number | null => {
+  const candles = chartData
+    .map(parseCandlePoint)
+    .filter((item): item is ParsedCandlePoint => !!item)
+    .map((item) => ({ ...item, timeSec: toUnixSec(item.time) }))
+    .filter((item) => item.timeSec > 0)
+    .sort((a, b) => a.timeSec - b.timeSec);
+  if (candles.length === 0) {
+    return null;
   }
-  return numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
+  let best = candles[0];
+  for (const candle of candles) {
+    if (candle.timeSec <= timeSec) {
+      best = candle;
+    } else {
+      break;
+    }
+  }
+  const close = Number(best.close);
+  return Number.isFinite(close) && close > 0 ? close : null;
+};
+
+/** If fill is a coin-leg price on a ratio chart (or vice versa), snap to the candle. */
+const priceOnChartScale = (
+  rawPrice: number,
+  chartData: unknown[],
+  timeSec: number,
+  forceSnap: boolean,
+): number | null => {
+  const candle = candleCloseAtSec(chartData, timeSec);
+  if (forceSnap && candle != null) {
+    return candle;
+  }
+  if (!Number.isFinite(rawPrice) || rawPrice <= 0) {
+    return candle;
+  }
+  if (candle != null && (rawPrice < candle * 0.25 || rawPrice > candle * 4)) {
+    return candle;
+  }
+  return rawPrice;
 };
 
 export const buildDonchianSnapshot = (
@@ -871,7 +1006,21 @@ export const buildOpenStrategyChartLayers = (
     : null;
 
   const strategyEventsFiltered = strategyEvents.filter((e) => e.strategyId === strategy.id);
-  const flow = buildTradeFlowLayers(strategy, strategyEventsFiltered, chartData, idPrefix);
+  const isSynth = strategy.market_mode === 'synthetic';
+  const baseSymbol = String(strategy.base_symbol || '').toUpperCase();
+  const eventsForFlow = isSynth && baseSymbol
+    ? strategyEventsFiltered.filter((e) => String(e.symbol || '').toUpperCase() === baseSymbol)
+    : strategyEventsFiltered;
+  const flow = buildTradeFlowLayers(
+    strategy,
+    eventsForFlow.length > 0 ? eventsForFlow : strategyEventsFiltered,
+    chartData,
+    idPrefix,
+    {
+      forceSnapToCandle: isSynth,
+      symbol: isSynth ? baseSymbol : undefined,
+    },
+  );
 
   const overlayLines: OverlayLine[] = [
     ...(donchian ? donchian.overlays : []),

@@ -3,6 +3,7 @@ import { Checkbox, Collapse, Modal, Space, Spin, Tag, Typography } from 'antd';
 import axios from 'axios';
 import ChartComponent from './ChartComponent';
 import type { EnrichedMonitoringTradeRow } from '../utils/monitoringTradeEnrichment';
+import { shortStrategyLabel } from '../utils/monitoringTradeEnrichment';
 import {
   buildOpenStrategyChartLayers,
   buildStrategyTradeMarkersFromEvents,
@@ -158,6 +159,11 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
         if (!cancelled) {
           setChartData(payload);
         }
+
+        if (meta?.market_mode === 'synthetic' && meta.base_symbol && meta.quote_symbol) {
+          void loadLegChart(meta.base_symbol, interval);
+          void loadLegChart(meta.quote_symbol, interval);
+        }
       } catch (err: unknown) {
         if (!cancelled) {
           setError(String((err as Error)?.message || 'Не удалось загрузить свечи'));
@@ -177,12 +183,14 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
     return symbol ? [symbol] : [];
   }, [strategyMeta, symbol]);
 
+  const strategyEvents = useMemo(() => toStrategyEvents(trades), [trades]);
+
   const layers = useMemo(() => {
     if (!strategyMeta || chartData.length === 0) {
       return {
         overlayLines: [],
         markers: buildStrategyTradeMarkersFromEvents(
-          toStrategyEvents(trades),
+          strategyEvents,
           markerSymbols,
           {
             chartData,
@@ -195,11 +203,11 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
     return buildOpenStrategyChartLayers(
       strategyMeta,
       chartData,
-      toStrategyEvents(trades),
+      strategyEvents,
       [],
       `mon:${apiKeyName}:${strategyMeta.id}`,
     );
-  }, [apiKeyName, chartData, markerSymbols, primaryStrategyId, strategyMeta, trades]);
+  }, [apiKeyName, chartData, markerSymbols, primaryStrategyId, strategyEvents, strategyMeta]);
 
   const overlayLines = useMemo(() => {
     const lines = layers.overlayLines || [];
@@ -224,35 +232,64 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
     : symbol;
 
   const strategyTitle = showStrategyLabel && strategyMeta
-    ? `${strategyMeta.name} · ${strategyMeta.strategy_type || 'strategy'} #${strategyMeta.id}`
+    ? shortStrategyLabel(strategyMeta.strategy_type, strategyMeta.name)
     : null;
 
   const legItems = strategyMeta?.market_mode === 'synthetic'
     ? [
       strategyMeta.base_symbol,
       strategyMeta.quote_symbol,
-    ].filter(Boolean).map((legSymbol) => ({
-      key: legSymbol,
-      label: (
-        <SpaceLike>
-          <span>{legSymbol}</span>
-          <Tag>leg</Tag>
-        </SpaceLike>
-      ),
-      children: (() => {
-        const leg = legCharts[legSymbol];
-        if (!leg || leg.loading) {
-          return <div style={{ padding: 16, textAlign: 'center' }}><Spin size="small" /></div>;
-        }
-        if (leg.error) {
-          return <Typography.Text type="danger">{leg.error}</Typography.Text>;
-        }
-        if (!leg.data.length) {
-          return <Typography.Text type="secondary">Нет данных</Typography.Text>;
-        }
-        return <ChartComponent data={leg.data} type="candlestick" />;
-      })(),
-    }))
+    ].filter(Boolean).map((legSymbol) => {
+      const legEvents = strategyEvents.filter(
+        (event) => String(event.symbol || '').toUpperCase() === String(legSymbol).toUpperCase(),
+      );
+      const leg = legCharts[legSymbol];
+      const legLayers = !leg?.data?.length
+        ? { overlayLines: [], markers: [] }
+        : buildOpenStrategyChartLayers(
+          { ...strategyMeta, market_mode: 'mono', base_symbol: legSymbol, quote_symbol: '' },
+          leg.data,
+          legEvents,
+          [],
+          `mon-leg:${apiKeyName}:${strategyMeta.id}:${legSymbol}`,
+        );
+      return {
+        key: legSymbol,
+        label: (
+          <SpaceLike>
+            <span>{legSymbol}</span>
+            <Tag>leg</Tag>
+            <Tag>{legEvents.length} fills</Tag>
+          </SpaceLike>
+        ),
+        children: (() => {
+          if (!leg || leg.loading) {
+            return <div style={{ padding: 16, textAlign: 'center' }}><Spin size="small" /></div>;
+          }
+          if (leg.error) {
+            return <Typography.Text type="danger">{leg.error}</Typography.Text>;
+          }
+          if (!leg.data.length) {
+            return <Typography.Text type="secondary">Нет данных</Typography.Text>;
+          }
+          return (
+            <ChartComponent
+              data={leg.data}
+              type="candlestick"
+              markers={showTradePath ? legLayers.markers : []}
+              overlayLines={(showLevels || showTradePath)
+                ? (legLayers.overlayLines || []).filter((line) => {
+                  const id = String(line.id || '');
+                  const isFlow = id.includes(':flow');
+                  if (isFlow) return showTradePath;
+                  return showLevels;
+                })
+                : []}
+            />
+          );
+        })(),
+      };
+    })
     : [];
 
   return (
@@ -304,6 +341,7 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
       {legItems.length > 0 ? (
         <Collapse
           style={{ marginTop: 12 }}
+          defaultActiveKey={[strategyMeta.base_symbol, strategyMeta.quote_symbol].filter(Boolean)}
           items={legItems}
           onChange={(keys) => {
             const opened = Array.isArray(keys) ? keys : [keys];
