@@ -3118,7 +3118,14 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       runtime.candles,
       event.candleIndex,
       length,
-      strategy.detection_source,
+      (() => {
+        // Research override for Donchian/zz_breakout only (ZZ uses BT_ZZ_BREAK_MODE).
+        if (isZzPivot) return strategy.detection_source;
+        const env = String(process.env.BT_DONCHIAN_BREAK_MODE || '').trim().toLowerCase();
+        if (env === 'wick' || env === 'hl') return 'wick';
+        if (env === 'close') return 'close';
+        return strategy.detection_source;
+      })(),
       zscoreEntry,
       strategy.long_enabled,
       strategy.short_enabled,
@@ -3339,7 +3346,12 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         }
       }
 
-      if (!closedOnCurrentBar && !isZzPivot && state === 'long' && entryPrice) {
+      // Donchian mid-channel / width stop. Research: BT_CHANNEL_EXIT_MODE=flip_only
+      // → hold until opposite break (signal_flip) or trailing TP — no early center exit.
+      const channelExitMode = String(process.env.BT_CHANNEL_EXIT_MODE || 'center').trim().toLowerCase();
+      const allowCenterExit = channelExitMode !== 'flip_only';
+
+      if (allowCenterExit && !closedOnCurrentBar && !isZzPivot && state === 'long' && entryPrice) {
         const hi = Number(signalPayload.donchianHigh);
         const lo = Number(signalPayload.donchianLow);
         const frac = ctx.channelWidthStopFraction;
@@ -3358,7 +3370,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         }
       }
 
-      if (!closedOnCurrentBar && !isZzPivot && state === 'short' && entryPrice) {
+      if (allowCenterExit && !closedOnCurrentBar && !isZzPivot && state === 'short' && entryPrice) {
         const hi = Number(signalPayload.donchianHigh);
         const lo = Number(signalPayload.donchianLow);
         const frac = ctx.channelWidthStopFraction;
