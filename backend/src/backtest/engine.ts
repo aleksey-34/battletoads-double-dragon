@@ -1044,6 +1044,117 @@ const hasConfirmedBullishFractal = (candles: ParsedCandle[], candleIndex: number
   return pivotIndex >= wings && isBullishFractalAt(candles, pivotIndex, wings);
 };
 
+type ResearchStopSpec =
+  | { kind: 'ema'; period: number }
+  | { kind: 'psar'; step: number; maxAf: number };
+
+/** Parse BT_RESEARCH_STOP=ema:20 | psar:0.02,0.2 — research only. */
+const parseResearchStopEnv = (): ResearchStopSpec | null => {
+  const raw = String(process.env.BT_RESEARCH_STOP || '').trim().toLowerCase();
+  if (!raw || raw === 'none') return null;
+  if (raw.startsWith('ema:')) {
+    const period = Math.max(2, Math.floor(Number(raw.slice(4)) || 0));
+    return period >= 2 ? { kind: 'ema', period } : null;
+  }
+  if (raw.startsWith('psar:')) {
+    const parts = raw.slice(5).split(',').map((x) => Number(x.trim()));
+    const step = Number.isFinite(parts[0]) && parts[0] > 0 ? parts[0] : 0.02;
+    const maxAf = Number.isFinite(parts[1]) && parts[1] > step ? parts[1] : 0.2;
+    return { kind: 'psar', step, maxAf };
+  }
+  return null;
+};
+
+const emaAtIndex = (candles: ParsedCandle[], index: number, period: number): number | null => {
+  if (index < period - 1 || period < 2) return null;
+  const k = 2 / (period + 1);
+  let ema = candles[index - period + 1].close;
+  for (let i = index - period + 2; i <= index; i += 1) {
+    ema = candles[i].close * k + ema * (1 - k);
+  }
+  return ema;
+};
+
+/** Wilder PSAR from entry bar to current; returns whether stop hit on current close. */
+const psarStopHit = (
+  candles: ParsedCandle[],
+  entryIndex: number,
+  index: number,
+  side: 'long' | 'short',
+  step: number,
+  maxAf: number,
+): boolean => {
+  if (entryIndex < 0 || index <= entryIndex || entryIndex >= candles.length) return false;
+  let bull = side === 'long';
+  let af = step;
+  let ep = bull ? candles[entryIndex].high : candles[entryIndex].low;
+  let sar = bull ? candles[entryIndex].low : candles[entryIndex].high;
+  for (let i = entryIndex + 1; i <= index; i += 1) {
+    const bar = candles[i];
+    const prevSar = sar;
+    sar = prevSar + af * (ep - prevSar);
+    if (bull) {
+      const prevLow = candles[i - 1].low;
+      const prev2Low = i >= 2 ? candles[i - 2].low : prevLow;
+      sar = Math.min(sar, prevLow, prev2Low);
+      if (bar.low < sar) {
+        if (i === index) return true;
+        bull = false;
+        sar = ep;
+        ep = bar.low;
+        af = step;
+      } else if (bar.high > ep) {
+        ep = bar.high;
+        af = Math.min(maxAf, af + step);
+      }
+    } else {
+      const prevHigh = candles[i - 1].high;
+      const prev2High = i >= 2 ? candles[i - 2].high : prevHigh;
+      sar = Math.max(sar, prevHigh, prev2High);
+      if (bar.high > sar) {
+        if (i === index) return true;
+        bull = true;
+        sar = ep;
+        ep = bar.high;
+        af = step;
+      } else if (bar.low < ep) {
+        ep = bar.low;
+        af = Math.min(maxAf, af + step);
+      }
+    }
+  }
+  return false;
+};
+
+const evaluateResearchStop = (
+  spec: ResearchStopSpec,
+  state: 'long' | 'short',
+  candles: ParsedCandle[],
+  index: number,
+  entryTimeMs: number,
+  _entryPrice: number,
+): string | null => {
+  let entryIndex = index;
+  while (entryIndex > 0 && candles[entryIndex].timeMs > entryTimeMs) entryIndex -= 1;
+  if (candles[entryIndex]?.timeMs < entryTimeMs && entryIndex + 1 < candles.length) {
+    entryIndex += 1;
+  }
+  if (spec.kind === 'ema') {
+    const ema = emaAtIndex(candles, index, spec.period);
+    if (ema == null) return null;
+    const close = candles[index].close;
+    if (state === 'long' && close < ema) return `research_ema${spec.period}_exit_long`;
+    if (state === 'short' && close > ema) return `research_ema${spec.period}_exit_short`;
+    return null;
+  }
+  if (spec.kind === 'psar') {
+    if (psarStopHit(candles, entryIndex, index, state, spec.step, spec.maxAf)) {
+      return state === 'long' ? 'research_psar_exit_long' : 'research_psar_exit_short';
+    }
+  }
+  return null;
+};
+
 const normalizeMacroExitOverlay = (raw: unknown): MacroExitOverlay | null => {
   if (!raw || typeof raw !== 'object') return null;
   const src = raw as MacroExitOverlay;
@@ -3284,19 +3395,32 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         closedOnCurrentBar = true;
       }
     } else if (!isClassicDca && !isMomentumScalp) {
-      // ZZ pivot SAR exit (opposite level) — wick (default) or close via detection_source / BT_ZZ_BREAK_MODE
+      // ZZ pivot exit: SAR (default) or mid-level early exit (BT_ZZ_EXIT_MODE=mid)
       if (!closedOnCurrentBar && isZzPivot) {
         const levels = runtime.zzPivotLevelSeries?.[event.candleIndex];
         const zzBreak = resolveZzBreakMode(strategy.detection_source);
+        const zzExitMode = String(process.env.BT_ZZ_EXIT_MODE || 'sar').trim().toLowerCase();
         if (levels) {
-          if (state === 'long' && computeZzPivotSarHit(candle, 'long', levels.levelLong, levels.levelShort, zzBreak)) {
-            closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'zz_sar_long');
-            closedOnCurrentBar = true;
-          }
-          if (!closedOnCurrentBar && state === 'short'
-            && computeZzPivotSarHit(candle, 'short', levels.levelLong, levels.levelShort, zzBreak)) {
-            closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'zz_sar_short');
-            closedOnCurrentBar = true;
+          if (zzExitMode === 'mid') {
+            const mid = (levels.levelLong + levels.levelShort) / 2;
+            if (state === 'long' && candle.close <= mid) {
+              closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'zz_mid_exit_long');
+              closedOnCurrentBar = true;
+            }
+            if (!closedOnCurrentBar && state === 'short' && candle.close >= mid) {
+              closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'zz_mid_exit_short');
+              closedOnCurrentBar = true;
+            }
+          } else {
+            if (state === 'long' && computeZzPivotSarHit(candle, 'long', levels.levelLong, levels.levelShort, zzBreak)) {
+              closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'zz_sar_long');
+              closedOnCurrentBar = true;
+            }
+            if (!closedOnCurrentBar && state === 'short'
+              && computeZzPivotSarHit(candle, 'short', levels.levelLong, levels.levelShort, zzBreak)) {
+              closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'zz_sar_short');
+              closedOnCurrentBar = true;
+            }
           }
         }
       }
@@ -3346,22 +3470,23 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         }
       }
 
-      // Donchian mid-channel / width stop. Research: BT_CHANNEL_EXIT_MODE=flip_only
-      // → hold until opposite break (signal_flip) or trailing TP — no early center exit.
+      // Donchian early exits:
+      // - center: live default (unless BT_CHANNEL_EXIT_MODE=flip_only)
+      // - chanfrac: width stop from entry — allowed even under flip_only (disaster cap)
       const channelExitMode = String(process.env.BT_CHANNEL_EXIT_MODE || 'center').trim().toLowerCase();
       const allowCenterExit = channelExitMode !== 'flip_only';
+      const frac = ctx.channelWidthStopFraction;
 
-      if (allowCenterExit && !closedOnCurrentBar && !isZzPivot && state === 'long' && entryPrice) {
+      if (!closedOnCurrentBar && !isZzPivot && state === 'long' && entryPrice) {
         const hi = Number(signalPayload.donchianHigh);
         const lo = Number(signalPayload.donchianLow);
-        const frac = ctx.channelWidthStopFraction;
         let hit = false;
         let reason = 'stop_loss_long_center';
         if (frac > 0 && Number.isFinite(hi) && Number.isFinite(lo) && hi > lo) {
           const stopPx = entryPrice - (hi - lo) * frac;
           hit = signalPayload.current <= stopPx;
           reason = `stop_loss_long_chanfrac_${frac}`;
-        } else {
+        } else if (allowCenterExit) {
           hit = signalPayload.current <= signalPayload.donchianCenter;
         }
         if (hit) {
@@ -3370,22 +3495,48 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         }
       }
 
-      if (allowCenterExit && !closedOnCurrentBar && !isZzPivot && state === 'short' && entryPrice) {
+      if (!closedOnCurrentBar && !isZzPivot && state === 'short' && entryPrice) {
         const hi = Number(signalPayload.donchianHigh);
         const lo = Number(signalPayload.donchianLow);
-        const frac = ctx.channelWidthStopFraction;
         let hit = false;
         let reason = 'stop_loss_short_center';
         if (frac > 0 && Number.isFinite(hi) && Number.isFinite(lo) && hi > lo) {
           const stopPx = entryPrice + (hi - lo) * frac;
           hit = signalPayload.current >= stopPx;
           reason = `stop_loss_short_chanfrac_${frac}`;
-        } else {
+        } else if (allowCenterExit) {
           hit = signalPayload.current >= signalPayload.donchianCenter;
         }
         if (hit) {
           closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, reason);
           closedOnCurrentBar = true;
+        }
+      }
+
+      // Research-only stops (BT_RESEARCH_STOP=ema:20 | psar:0.02,0.2 | none). Live ignores.
+      if (!closedOnCurrentBar && (state === 'long' || state === 'short') && entryPrice) {
+        const researchStop = parseResearchStopEnv();
+        if (researchStop) {
+          const hit = evaluateResearchStop(
+            researchStop,
+            state,
+            runtime.candles,
+            event.candleIndex,
+            Number(runtime.openTrade?.entryTime || 0),
+            entryPrice,
+          );
+          if (hit) {
+            closePosition(
+              ctx,
+              runtime,
+              Number(strategy.id),
+              strategy.name,
+              event.timeMs,
+              signalPayload.current,
+              hit,
+            );
+            closedOnCurrentBar = true;
+          }
         }
       }
     }
