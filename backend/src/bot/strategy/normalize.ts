@@ -147,6 +147,15 @@ export const getTypeAwareStrategyDefaults = (strategyType: StrategyType) => {
     };
   }
 
+  if (strategyType === 'zz_breakout') {
+    return {
+      take_profit_percent: DEFAULT_STRATEGY.take_profit_percent,
+      price_channel_length: DEFAULT_STRATEGY.price_channel_length,
+      // Flip-hold research Aug 2026: wick entry + hold until opposite break.
+      detection_source: 'wick' as const,
+    };
+  }
+
   return {
     take_profit_percent: DEFAULT_STRATEGY.take_profit_percent,
     price_channel_length: DEFAULT_STRATEGY.price_channel_length,

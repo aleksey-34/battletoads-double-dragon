@@ -1233,20 +1233,47 @@ export const executeStrategy = async (
       }
     }
 
-    if (!closedAction && !isZzPivot && state === 'long' && entryRatio && currentRatio <= donchianCenter) {
-      await closeAndRecordExit('stop_loss_long', 'long');
-      closedAction = 'stop_loss_long';
-      closedResult = `Stop-loss (center) hit for long ${positionLabel}`;
+    // Donchian flip-hold (zz_breakout): no mid-channel exit; optional width disaster cap (cf=1.0).
+    // Other non-ZZ channel strategies keep classic center stop.
+    const strategyTypeName = String(mergedStrategy.strategy_type || '');
+    const useDonchianFlipHold = !isZzPivot && (
+      strategyTypeName === 'zz_breakout'
+      || strategyTypeName === 'DD_BattleToads'
+    );
+    const channelWidthStopFrac = useDonchianFlipHold ? 1.0 : 0;
 
-      logger.info(`DD_BattleToads SL long triggered for strategy ${strategyId} (${apiKeyName})`);
+    if (!closedAction && !isZzPivot && state === 'long' && entryRatio) {
+      if (channelWidthStopFrac > 0 && donchianHigh > donchianLow) {
+        const stopPx = entryRatio - (donchianHigh - donchianLow) * channelWidthStopFrac;
+        if (currentRatio <= stopPx) {
+          await closeAndRecordExit('stop_loss_long', 'long');
+          closedAction = 'stop_loss_long';
+          closedResult = `Channel-width stop (cf=${channelWidthStopFrac}) long ${positionLabel}`;
+          logger.info(`Donchian flip-hold width SL long for strategy ${strategyId} (${apiKeyName})`);
+        }
+      } else if (!useDonchianFlipHold && currentRatio <= donchianCenter) {
+        await closeAndRecordExit('stop_loss_long', 'long');
+        closedAction = 'stop_loss_long';
+        closedResult = `Stop-loss (center) hit for long ${positionLabel}`;
+        logger.info(`DD_BattleToads SL long triggered for strategy ${strategyId} (${apiKeyName})`);
+      }
     }
 
-    if (!closedAction && !isZzPivot && state === 'short' && entryRatio && currentRatio >= donchianCenter) {
-      await closeAndRecordExit('stop_loss_short', 'short');
-      closedAction = 'stop_loss_short';
-      closedResult = `Stop-loss (center) hit for short ${positionLabel}`;
-
-      logger.info(`DD_BattleToads SL short triggered for strategy ${strategyId} (${apiKeyName})`);
+    if (!closedAction && !isZzPivot && state === 'short' && entryRatio) {
+      if (channelWidthStopFrac > 0 && donchianHigh > donchianLow) {
+        const stopPx = entryRatio + (donchianHigh - donchianLow) * channelWidthStopFrac;
+        if (currentRatio >= stopPx) {
+          await closeAndRecordExit('stop_loss_short', 'short');
+          closedAction = 'stop_loss_short';
+          closedResult = `Channel-width stop (cf=${channelWidthStopFrac}) short ${positionLabel}`;
+          logger.info(`Donchian flip-hold width SL short for strategy ${strategyId} (${apiKeyName})`);
+        }
+      } else if (!useDonchianFlipHold && currentRatio >= donchianCenter) {
+        await closeAndRecordExit('stop_loss_short', 'short');
+        closedAction = 'stop_loss_short';
+        closedResult = `Stop-loss (center) hit for short ${positionLabel}`;
+        logger.info(`DD_BattleToads SL short triggered for strategy ${strategyId} (${apiKeyName})`);
+      }
     }
   }
 

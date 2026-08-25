@@ -601,7 +601,8 @@ const stampPortfolios = async (opts: {
   }
 
   const tierCb = {
-    enabled: true,
+    // Flip-hold F+cf1.0 decision Aug 2026: disable tier CB on zz_breakout (full lots).
+    enabled: false,
     peakWindowDays: 30,
     ddTriggerPercent: 8,
     lotMultiplier: 0.5,
@@ -644,29 +645,42 @@ const stampPortfolios = async (opts: {
     logger.info(`[nightlyStorefrontRoll] BT ${pf.id} n=${uniqIds.length} dep=${deposit} books=${Object.keys(maxOpenPositionsByBook).join(',') || '-'}`);
     if (!uniqIds.length || deposit <= 0) continue;
 
-    const r = await runBacktest({
-      apiKeyName: opts.apiKeyName,
-      mode: 'portfolio',
-      strategyIds: uniqIds,
-      dateFrom: opts.dateFrom,
-      dateTo: opts.dateTo,
-      bars: 14000,
-      warmupBars: 120,
-      skipMissingSymbols: true,
-      initialBalance: deposit,
-      commissionPercent: 0.1,
-      slippagePercent: 0.05,
-      maxOpenPositions: 0,
-      maxOpenPositionsByBook,
-      bookKeyByStrategyId,
-      lotPercentOverride: 1,
-      lotPercentMultiplierByStrategyId,
-      enablePairLock: true,
-      maxDepositOverride: anyReinvest ? deposit * 50 : 0,
-      reinvestPercentByStrategyId,
-      portfolioCircuitBreaker: tierCb as any,
-      researchLotSchedule: fearBoost as any,
-    } as any);
+    const prevExit = process.env.BT_CHANNEL_EXIT_MODE;
+    const prevBreak = process.env.BT_DONCHIAN_BREAK_MODE;
+    process.env.BT_CHANNEL_EXIT_MODE = 'flip_only';
+    process.env.BT_DONCHIAN_BREAK_MODE = 'wick';
+    let r: Awaited<ReturnType<typeof runBacktest>>;
+    try {
+      r = await runBacktest({
+        apiKeyName: opts.apiKeyName,
+        mode: 'portfolio',
+        strategyIds: uniqIds,
+        dateFrom: opts.dateFrom,
+        dateTo: opts.dateTo,
+        bars: 14000,
+        warmupBars: 120,
+        skipMissingSymbols: true,
+        initialBalance: deposit,
+        commissionPercent: 0.1,
+        slippagePercent: 0.05,
+        maxOpenPositions: 0,
+        maxOpenPositionsByBook,
+        bookKeyByStrategyId,
+        lotPercentOverride: 1,
+        lotPercentMultiplierByStrategyId,
+        enablePairLock: true,
+        maxDepositOverride: anyReinvest ? deposit * 50 : 0,
+        reinvestPercentByStrategyId,
+        portfolioCircuitBreaker: tierCb as any,
+        researchLotSchedule: fearBoost as any,
+        channelWidthStopFraction: 1.0,
+      } as any);
+    } finally {
+      if (prevExit !== undefined) process.env.BT_CHANNEL_EXIT_MODE = prevExit;
+      else delete process.env.BT_CHANNEL_EXIT_MODE;
+      if (prevBreak !== undefined) process.env.BT_DONCHIAN_BREAK_MODE = prevBreak;
+      else delete process.env.BT_DONCHIAN_BREAK_MODE;
+    }
 
     const s = r.summary || {};
     const rawCurve = r.equityCurve || [];
@@ -788,7 +802,11 @@ const stampPortfolios = async (opts: {
           // Fair copy-compare must use the same exchange OHLC as live (WEEX etc.),
           // not hybrid/Bybit history on BTDD_D1 — otherwise ZZ wick breaks diverge.
           const prevHybridDir = process.env.HYBRID_CANDLE_DIR;
+          const prevExit = process.env.BT_CHANNEL_EXIT_MODE;
+          const prevBreak = process.env.BT_DONCHIAN_BREAK_MODE;
           delete process.env.HYBRID_CANDLE_DIR;
+          process.env.BT_CHANNEL_EXIT_MODE = 'flip_only';
+          process.env.BT_DONCHIAN_BREAK_MODE = 'wick';
           let result: Awaited<ReturnType<typeof runBacktest>>;
           try {
             result = await runBacktest({
@@ -815,10 +833,15 @@ const stampPortfolios = async (opts: {
               reinvestPercentByStrategyId: fairRiByStrategyId,
               portfolioCircuitBreaker: tierCb as any,
               researchLotSchedule: fearBoost as any,
+              channelWidthStopFraction: 1.0,
             } as any);
           } finally {
             if (prevHybridDir !== undefined) process.env.HYBRID_CANDLE_DIR = prevHybridDir;
             else delete process.env.HYBRID_CANDLE_DIR;
+            if (prevExit !== undefined) process.env.BT_CHANNEL_EXIT_MODE = prevExit;
+            else delete process.env.BT_CHANNEL_EXIT_MODE;
+            if (prevBreak !== undefined) process.env.BT_DONCHIAN_BREAK_MODE = prevBreak;
+            else delete process.env.BT_DONCHIAN_BREAK_MODE;
           }
           const packed = packFairRun(result, fromDate, opts.dateTo, FAIR_COPY_CAPITAL, idToPair);
           if (packed.trades === 0) {
