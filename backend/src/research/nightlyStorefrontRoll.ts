@@ -214,15 +214,19 @@ const fetchLiveEntryStats = async (
   const idClause = idFilter.length
     ? ` AND lte.strategy_id IN (${idFilter.map(() => '?').join(',')})`
     : '';
-  // Deduplicated count: for synthetic strategies, both legs fire within the same second.
-  // We count DISTINCT (strategy_id, second) as one cycle, so synth doesn't double-count.
+  // One logical cycle per strategy per evaluated bar (`entry_time`), not per wall-clock
+  // second of `actual_time`. Synth base+quote legs share entry_time but can land ≥1s apart
+  // on actual_time → DISTINCT actual_time/1000 inflated freqX up to ~2× on synth.
   const rows = await db.all(
     `SELECT
         lte.strategy_id AS sid,
         COALESCE(s.base_symbol, '') AS base_symbol,
         COALESCE(s.quote_symbol, '') AS quote_symbol,
         COALESCE(s.market_mode, '') AS market_mode,
-        COUNT(DISTINCT CAST(lte.actual_time / 1000 AS INTEGER)) AS n,
+        COUNT(DISTINCT COALESCE(
+          NULLIF(lte.entry_time, 0),
+          CAST(lte.actual_time / 1000 AS INTEGER) * 1000
+        )) AS n,
         SUM(ABS(COALESCE(lte.actual_price, 0) * COALESCE(lte.position_size, 0))) AS vol
      FROM live_trade_events lte
      JOIN strategies s ON s.id = lte.strategy_id
