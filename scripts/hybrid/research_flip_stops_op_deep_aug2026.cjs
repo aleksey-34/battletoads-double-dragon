@@ -35,11 +35,14 @@ const COPY_FAIR = { P1: 'Copy_Alex1', P2: 'icopy1-api', P3: 'arcopy1' };
 
 const isZzType = (t) => {
   const s = String(t || '');
-  return /^ZZ_/i.test(s) || s === 'ZZ_Fast' || s === 'ZZ_Instance';
+  // Do NOT use /^ZZ_/i — that also matches Donchian `zz_breakout`.
+  return s === 'ZZ_Fast' || s === 'ZZ_Instance'
+    || /^ZZ_Fast$/i.test(s) || /^ZZ_Instance$/i.test(s);
 };
 const isDdType = (t) => {
   const s = String(t || '');
-  return s === 'zz_breakout' || s === 'DD_BattleToads' || s === 'donchian';
+  return s === 'zz_breakout' || s === 'DD_BattleToads' || s === 'donchian'
+    || /^zz_breakout$/i.test(s);
 };
 
 const FRACTAL_OVERLAY = {
