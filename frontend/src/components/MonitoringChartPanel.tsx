@@ -522,7 +522,10 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
         String(a.symbol).localeCompare(String(b.symbol)),
       render: (_: string, row: DisplayMonitoringTradeRow) => (
         <Space size={4} wrap>
-          <span>{row.symbol}</span>
+          <span>{row.synthPairLabel || row.symbol}</span>
+          {row.synthPairLabel && !row.synthGrouped ? (
+            <Tag style={{ margin: 0, fontSize: 10 }}>{row.symbol}</Tag>
+          ) : null}
           {row.synthGrouped || row.synthPairLabel ? (
             <Tag color="purple" style={{ margin: 0, fontSize: 10 }}>synth</Tag>
           ) : null}

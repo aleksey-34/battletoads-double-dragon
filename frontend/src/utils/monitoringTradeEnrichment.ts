@@ -27,7 +27,8 @@ export type MonitoringTradeGroupMode = 'none' | 'symbol' | 'flowType' | 'side' |
 export type MonitoringPnlBucket = 'profit' | 'loss' | 'pending';
 
 /** Legs of one synth signal usually land within 2 minutes. */
-export const SYNTH_LEG_BUCKET_MS = 120_000;
+export /** Soft bucket for pairing synth legs (~10 min). Absolute floor still used; wider = fewer orphans. */
+const SYNTH_LEG_BUCKET_MS = 10 * 60_000;
 
 export const buildSynthStrategyMap = (
   strategies: Array<Record<string, unknown>>,

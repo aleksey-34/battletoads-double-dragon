@@ -3249,6 +3249,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     propagation?: { running?: boolean; logs?: Array<{ ts: string; level: string; message: string }> };
   }>>({});
   const [materializationLogTarget, setMaterializationLogTarget] = useState<string | null>(null);
+  const [portfolioMatLogTarget, setPortfolioMatLogTarget] = useState<{
+    setKey: string;
+    displayLabel: string;
+    portfolioId: number;
+    tenants: Array<{
+      tenantId: number;
+      slug: string;
+      displayName: string;
+      apiKeyName: string;
+      actualEnabled: boolean;
+      booksFound: number;
+      booksExpected: number;
+      materializationStatus: string;
+      issues: string[];
+    }>;
+  } | null>(null);
   const [publishResponse, setPublishResponse] = useState<AdminPublishResponse | null>(() => {
     if (typeof window === 'undefined') {
       return null;
@@ -4894,6 +4910,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         .map((pt: any) => Number(pt.e))
         .filter((v: number) => Number.isFinite(v));
       const materialization = (p.materialization || {}) as Record<string, any>;
+      const matTenants = apiTenants.map((row: any) => ({
+        tenantId: Number(row?.tenantId || 0),
+        slug: String(row?.slug || ''),
+        displayName: String(row?.displayName || row?.slug || ''),
+        apiKeyName: String(row?.apiKeyName || ''),
+        actualEnabled: Boolean(row?.actualEnabled),
+        booksFound: Number(row?.booksFound || 0),
+        booksExpected: Number(row?.booksExpected || 0),
+        materializationStatus: String(row?.materializationStatus || 'ok'),
+        issues: Array.isArray(row?.issues) ? row.issues.map((x: unknown) => String(x)) : [],
+      })).filter((row: { tenantId: number }) => row.tenantId > 0);
       return {
         id: p.id as number | string,
         setKey,
@@ -4904,6 +4931,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         memberCount: p.memberCount,
         members: p.members,
         tenants,
+        matTenants,
         tenantCount: Number(p.tenantCount ?? tenants.length),
         activeCount: Number(p.activeCount ?? tenants.filter((t: any) => Number(t.algofundProfile?.actual_enabled || 0) === 1).length),
         materialization: {
@@ -13763,6 +13791,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                           status={badgeStatus as any}
                                                           text={`Материализация ${Number(audit.okCount || 0)}/${totalClients}${audit.partialCount ? ` (+${audit.partialCount} частично)` : ''}${audit.errorCount ? ` (${audit.errorCount} ошибок)` : ''}`}
                                                         />
+                                                        <Button
+                                                          size="small"
+                                                          type="link"
+                                                          style={{ padding: 0, height: 'auto' }}
+                                                          onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setPortfolioMatLogTarget({
+                                                              setKey: String(row.setKey),
+                                                              displayLabel: String(row.displayLabel || row.setKey),
+                                                              portfolioId: Number(row.id),
+                                                              tenants: Array.isArray(row.matTenants) ? row.matTenants : [],
+                                                            });
+                                                          }}
+                                                        >
+                                                          Лог
+                                                        </Button>
                                                       </Space>
                                                       <Progress percent={pct} size="small" status={progStatus as any} />
                                                     </Space>
@@ -15165,6 +15209,132 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             ))}
           </div>
         </Space>
+      </Modal>
+
+      <Modal
+        title={`Материализация портфеля: ${portfolioMatLogTarget?.displayLabel || '—'}`}
+        open={Boolean(portfolioMatLogTarget)}
+        onCancel={() => setPortfolioMatLogTarget(null)}
+        footer={<Button type="primary" onClick={() => setPortfolioMatLogTarget(null)}>Закрыть</Button>}
+        width={920}
+      >
+        {portfolioMatLogTarget ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Text type="secondary">
+              Статус по книгам ALGOFUND::slug::*. Remat — пересоздать книги портфеля. Demat — отвязать клиента от портфеля (без закрытия позиций на бирже).
+            </Text>
+            <Table
+              size="small"
+              pagination={false}
+              rowKey="tenantId"
+              dataSource={[...(portfolioMatLogTarget.tenants || [])].sort((a, b) => {
+                const rank = (s: string) => (s === 'error' ? 0 : s === 'partial' ? 1 : 2);
+                return rank(a.materializationStatus) - rank(b.materializationStatus)
+                  || String(a.slug).localeCompare(String(b.slug));
+              })}
+              columns={[
+                {
+                  title: 'Клиент',
+                  dataIndex: 'slug',
+                  render: (_: string, row: { slug: string; displayName: string; materializationStatus: string }) => (
+                    <Space>
+                      <Badge
+                        status={row.materializationStatus === 'ok' ? 'success' : row.materializationStatus === 'partial' ? 'warning' : 'error'}
+                      />
+                      <span>{row.displayName || row.slug}</span>
+                      <Text code>{row.slug}</Text>
+                    </Space>
+                  ),
+                },
+                {
+                  title: 'API key',
+                  dataIndex: 'apiKeyName',
+                  width: 160,
+                  render: (v: string) => (v ? <Text code>{v}</Text> : <Text type="danger">—</Text>),
+                },
+                {
+                  title: 'Книги',
+                  key: 'books',
+                  width: 90,
+                  render: (_: unknown, row: { booksFound: number; booksExpected: number }) =>
+                    `${row.booksFound}/${row.booksExpected}`,
+                },
+                {
+                  title: 'Trade',
+                  dataIndex: 'actualEnabled',
+                  width: 70,
+                  render: (v: boolean) => (v ? <Tag color="success">on</Tag> : <Tag>off</Tag>),
+                },
+                {
+                  title: 'Замечания',
+                  dataIndex: 'issues',
+                  render: (issues: string[]) => (Array.isArray(issues) && issues.length > 0 ? issues.join('; ') : '—'),
+                },
+                {
+                  title: 'Действия',
+                  key: 'actions',
+                  width: 180,
+                  render: (_: unknown, row: { tenantId: number; slug: string }) => (
+                    <Space size={4}>
+                      <Button
+                        size="small"
+                        loading={actionLoading === `portfolio-remat-${row.tenantId}`}
+                        onClick={() => {
+                          void (async () => {
+                            setActionLoading(`portfolio-remat-${row.tenantId}`);
+                            try {
+                              await axios.post(`/api/saas/algofund/${row.tenantId}/materialize-portfolio`, {
+                                portfolioId: portfolioMatLogTarget.portfolioId,
+                                setKey: portfolioMatLogTarget.setKey,
+                                activate: true,
+                              });
+                              messageApi.success(`Remat ${row.slug}`);
+                              await loadAdminPortfolios();
+                            } catch (error: any) {
+                              messageApi.error(String(error?.response?.data?.error || error?.message || 'remat failed'));
+                            } finally {
+                              setActionLoading('');
+                            }
+                          })();
+                        }}
+                      >
+                        Remat
+                      </Button>
+                      <Button
+                        size="small"
+                        danger
+                        loading={actionLoading === `portfolio-demat-${row.tenantId}`}
+                        onClick={() => {
+                          void (async () => {
+                            setActionLoading(`portfolio-demat-${row.tenantId}`);
+                            try {
+                              await axios.post(`/api/saas/algofund/${row.tenantId}/unassign-portfolio`, {
+                                portfolioId: portfolioMatLogTarget.portfolioId,
+                                setKey: portfolioMatLogTarget.setKey,
+                                clearPublished: true,
+                              });
+                              messageApi.success(`Demat ${row.slug}`);
+                              await loadAdminPortfolios();
+                              setPortfolioMatLogTarget((prev) => (prev
+                                ? { ...prev, tenants: prev.tenants.filter((t) => t.tenantId !== row.tenantId) }
+                                : prev));
+                            } catch (error: any) {
+                              messageApi.error(String(error?.response?.data?.error || error?.message || 'demat failed'));
+                            } finally {
+                              setActionLoading('');
+                            }
+                          })();
+                        }}
+                      >
+                        Demat
+                      </Button>
+                    </Space>
+                  ),
+                },
+              ]}
+            />
+          </Space>
+        ) : null}
       </Modal>
 
       <Modal

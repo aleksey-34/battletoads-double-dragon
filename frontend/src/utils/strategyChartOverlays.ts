@@ -578,17 +578,29 @@ export const buildTradeFlowLayers = (
     symbol?: string;
     hidePnl?: boolean;
     skipOpenFromState?: boolean;
+    /** Skip ratio/price reconstruct — required for synth leg charts (entryPrice is ratio). */
+    skipReconstruct?: boolean;
+    /** Markers only; no IN→OUT polylines (avoids spider-web on dense legs / long gaps). */
+    skipProgressLines?: boolean;
+    /** Hide progress line when IN→OUT spans more than this many seconds (diagonal through gaps). */
+    maxProgressGapSec?: number;
   },
 ): { overlayLines: OverlayLine[]; markers: ChartMarker[]; summary: TradeFlowSummary } => {
   const forceSnap = options?.forceSnapToCandle !== false;
   const hidePnl = options?.hidePnl === true;
-  const reconstructed = reconstructMissingEntries(events, chartData);
+  const reconstructed = options?.skipReconstruct
+    ? events
+    : reconstructMissingEntries(events, chartData);
   const collapsed = collapseEventsPerBar(reconstructed, chartData);
   const flowEvents = collapsed.length > 0 ? collapsed : reconstructed;
   const summary = buildTradeFlowSummary(strategy, flowEvents, chartData, options?.symbol);
   const overlayLines: OverlayLine[] = [];
   const markers: ChartMarker[] = [];
   const maxTrips = Math.max(1, Math.min(80, options?.maxTrips ?? MAX_FLOW_TRIPS));
+  const skipProgressLines = options?.skipProgressLines === true;
+  const maxProgressGapSec = Number.isFinite(Number(options?.maxProgressGapSec))
+    ? Math.max(0, Number(options?.maxProgressGapSec))
+    : 14 * 86_400;
 
   const syntheticOpenFromState: TradeRoundTrip | null = !summary.openTrip
     && options?.skipOpenFromState !== true
@@ -637,16 +649,21 @@ export const buildTradeFlowLayers = (
         { ...trip.exit, price: exitPrice },
       );
       const flowColor = pnl >= 0 ? '#22c55e' : '#ef4444';
+      const gapSec = Math.max(0, exitSnap.timeSec - entrySnap.timeSec);
+      const allowProgressLine = !skipProgressLines
+        && !(maxProgressGapSec > 0 && gapSec > maxProgressGapSec);
 
-      overlayLines.push({
-        id: `${idPrefix}:flow:${index}`,
-        color: flowColor,
-        lineWidth: 2,
-        data: [
-          { time: entrySnap.time, value: entryPrice },
-          { time: exitSnap.time, value: exitPrice },
-        ],
-      });
+      if (allowProgressLine) {
+        overlayLines.push({
+          id: `${idPrefix}:flow:${index}`,
+          color: flowColor,
+          lineWidth: 2,
+          data: [
+            { time: entrySnap.time, value: entryPrice },
+            { time: exitSnap.time, value: exitPrice },
+          ],
+        });
+      }
       pushMarker({
         id: `${idPrefix}:in:${trip.entry.id}`,
         time: entrySnap.time,
@@ -678,15 +695,20 @@ export const buildTradeFlowLayers = (
 
     if (mark !== null && markSec > entrySnap.timeSec) {
       const previewColor = upnl !== null && upnl >= 0 ? '#22c55e' : '#f97316';
-      overlayLines.push({
-        id: `${idPrefix}:flow-open:${index}`,
-        color: previewColor,
-        lineWidth: 2,
-        data: [
-          { time: entrySnap.time, value: openPrice },
-          { time: markTime, value: mark },
-        ],
-      });
+      const openGapSec = Math.max(0, markSec - entrySnap.timeSec);
+      const allowOpenLine = !skipProgressLines
+        && !(maxProgressGapSec > 0 && openGapSec > maxProgressGapSec);
+      if (allowOpenLine) {
+        overlayLines.push({
+          id: `${idPrefix}:flow-open:${index}`,
+          color: previewColor,
+          lineWidth: 2,
+          data: [
+            { time: entrySnap.time, value: openPrice },
+            { time: markTime, value: mark },
+          ],
+        });
+      }
     }
 
     const sameBarAsMark = lastCandle != null && entrySnap.timeSec === lastCandle.timeSec;
@@ -1247,6 +1269,9 @@ export const buildOpenStrategyChartLayers = (
       symbol: isLeg || isSynth ? baseSymbol : undefined,
       hidePnl: false,
       skipOpenFromState: isLeg,
+      // Leg charts: entryPrice on exits is often the synth ratio — reconstruct causes spider-webs.
+      skipReconstruct: isLeg,
+      skipProgressLines: isLeg,
     },
   );
 

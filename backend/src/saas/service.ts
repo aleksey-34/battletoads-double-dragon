@@ -20151,6 +20151,7 @@ export const listAlgofundPortfolios = async (): Promise<Array<Record<string, unk
         slug,
         displayName: asString(tr.display_name, slug),
         profileId: Number(tr.profile_id),
+        apiKeyName: asString(tr.api_key_name, ''),
         actualEnabled: Number(tr.actual_enabled || 0) === 1,
         requestedEnabled: Number(tr.requested_enabled || 0) === 1,
         publishedSystemName: asString(tr.published_system_name, ''),

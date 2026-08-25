@@ -41,6 +41,14 @@ const toStrategyEvents = (rows: EnrichedMonitoringTradeRow[]): StrategyTradeEven
     };
   });
 
+const eventDedupeKey = (e: StrategyTradeEvent): string => {
+  const n = Number(e.timestamp);
+  const sec = Number.isFinite(n) && n > 0
+    ? (n > 1e12 ? Math.floor(n / 1000) : Math.floor(n))
+    : 0;
+  return `${e.strategyId}|${e.id}|${e.tradeType}|${e.side}|${String(e.symbol || '')}|${sec}`;
+};
+
 const mapStrategyRow = (row: Record<string, unknown>): StrategyChartStrategy | null => {
   const id = Number(row.id);
   if (!Number.isFinite(id) || id <= 0) return null;
@@ -205,10 +213,19 @@ const MonitoringSymbolChartModal: React.FC<Props> = ({
   }, [strategyMeta, symbol]);
 
   const strategyEvents = useMemo(() => {
-    if (fetchedEvents.length > 0) {
-      return fetchedEvents;
+    const fromApi = fetchedEvents;
+    const fromTable = toStrategyEvents(trades);
+    if (fromApi.length === 0) {
+      return fromTable;
     }
-    return toStrategyEvents(trades);
+    if (fromTable.length === 0) {
+      return fromApi;
+    }
+    // Merge: table may include exchange_fill / recent rows missing from strategy-trades.
+    const map = new Map<string, StrategyTradeEvent>();
+    for (const e of fromTable) map.set(eventDedupeKey(e), e);
+    for (const e of fromApi) map.set(eventDedupeKey(e), e);
+    return Array.from(map.values()).sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
   }, [fetchedEvents, trades]);
 
   const layers = useMemo(() => {
