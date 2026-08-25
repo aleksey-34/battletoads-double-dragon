@@ -76,13 +76,31 @@ export const buildZzPivotLevelSeries = (
   return series;
 };
 
+/** Resolve ZZ break mode. Env `BT_ZZ_BREAK_MODE=wick|close` overrides for research only. */
+export const resolveZzBreakMode = (detectionSource?: string | null): 'wick' | 'close' => {
+  const env = String(process.env.BT_ZZ_BREAK_MODE || '').trim().toLowerCase();
+  if (env === 'close' || env === 'wick') return env;
+  const ds = String(detectionSource || '').trim().toLowerCase();
+  return ds === 'close' ? 'close' : 'wick';
+};
+
 export const computeZzPivotEntrySignal = (
   bar: ZzPivotBar,
   levels: ZzPivotLevels,
   longEnabled: boolean,
   shortEnabled: boolean,
+  breakMode: 'wick' | 'close' = 'wick',
 ): 'long' | 'short' | 'none' => {
   const { levelLong, levelShort } = levels;
+  if (breakMode === 'close') {
+    if (longEnabled && levelLong > 0 && bar.close >= levelLong) {
+      return 'long';
+    }
+    if (shortEnabled && levelShort > 0 && bar.close <= levelShort) {
+      return 'short';
+    }
+    return 'none';
+  }
   if (longEnabled && levelLong > 0 && bar.high >= levelLong) {
     return 'long';
   }
@@ -90,6 +108,22 @@ export const computeZzPivotEntrySignal = (
     return 'short';
   }
   return 'none';
+};
+
+/** ZZ SAR exit: wick (default) or close touch of opposite pivot. */
+export const computeZzPivotSarHit = (
+  bar: ZzPivotBar,
+  side: 'long' | 'short',
+  levelLong: number,
+  levelShort: number,
+  breakMode: 'wick' | 'close' = 'wick',
+): boolean => {
+  if (side === 'long') {
+    if (!(levelShort > 0)) return false;
+    return breakMode === 'close' ? bar.close <= levelShort : bar.low <= levelShort;
+  }
+  if (!(levelLong > 0)) return false;
+  return breakMode === 'close' ? bar.close >= levelLong : bar.high >= levelLong;
 };
 
 export const isZzPivotStrategyType = (strategyType: string): boolean => (

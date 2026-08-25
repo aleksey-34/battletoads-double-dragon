@@ -24,7 +24,9 @@ import { getOrderBlockEntryGateForApiKey, passesOrderBlockEntryGateLive } from '
 import {
   buildZzPivotLevelSeries,
   computeZzPivotEntrySignal,
+  computeZzPivotSarHit,
   isZzPivotStrategyType,
+  resolveZzBreakMode,
   normalizeZzPivotStrategyType,
   zzPivotVariantFromType,
 } from './zzPivotLevels';
@@ -725,6 +727,47 @@ export const executeStrategy = async (
       });
     }
 
+    // Last re-poll before kill: mixed often clears once WEEX finishes aggregating.
+    let confirmedMixed = true;
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+      const { invalidatePositionCache } = await import('./exchange');
+      invalidatePositionCache(apiKeyName);
+      const refetch = await getPositions(apiKeyName, undefined, { forceRefresh: true });
+      const reBase = (Array.isArray(refetch) ? refetch : []).find((position: any) => {
+        return normalizeSymbolKey(position?.symbol) === normalizeSymbolKey(mergedStrategy.base_symbol)
+          && Number.parseFloat(String(position?.size || '0')) > 0;
+      }) || null;
+      const reQuote = !isMono
+        ? (Array.isArray(refetch) ? refetch : []).find((position: any) => {
+          return normalizeSymbolKey(position?.symbol) === normalizeSymbolKey(mergedStrategy.quote_symbol)
+            && Number.parseFloat(String(position?.size || '0')) > 0;
+        }) || null
+        : null;
+      const reState = isMono
+        ? inferMonoStateFromPosition(reBase)
+        : inferSyntheticStateFromPair(reBase, reQuote);
+      if (reState !== 'mixed') {
+        confirmedMixed = false;
+        logger.warn(
+          `Mixed pair cleared on re-poll for strategy ${strategyId} (${apiKeyName}): now=${reState} — skip desync close`,
+        );
+      }
+    } catch (reErr) {
+      logger.warn(`Mixed re-poll failed for strategy ${strategyId}: ${(reErr as Error).message}`);
+    }
+    if (!confirmedMixed) {
+      return returnWithProcessedBar({
+        result: 'Mixed pair cleared on confirmation re-poll; close skipped',
+        action: 'mixed_cleared_on_repoll',
+        strategy: mergedStrategy,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
+
     const previousState = state;
     const previousEntryRatio = entryRatio;
     await closeStrategyExposure(apiKeyName, mergedStrategy);
@@ -836,17 +879,28 @@ export const executeStrategy = async (
     let siblingActiveCount = 0;
     try {
       const { db } = await import('../utils/database');
-      const sibRow: any = await db.get(
-        `SELECT COUNT(*) AS cnt FROM strategies s
-         JOIN api_keys ak ON ak.id = s.api_key_id
-         WHERE ak.name = ?
-           AND s.base_symbol = ?
-           AND s.id <> ?
-           AND s.is_active = 1
-           AND IFNULL(s.is_archived, 0) = 0
-           AND s.state IN ('long','short')`,
-        [apiKeyName, mergedStrategy.base_symbol, strategyId]
-      );
+      // Synth legs share quote symbols across books; base-only sibling check
+      // missed quote races and allowed false state_resynced_flat.
+      const baseSym = String(mergedStrategy.base_symbol || '').toUpperCase();
+      const quoteSym = String(mergedStrategy.quote_symbol || '').toUpperCase();
+      const legSymbols = [baseSym, quoteSym].filter((s) => s.length > 0);
+      const placeholders = legSymbols.map(() => '?').join(',');
+      const sibRow: any = legSymbols.length
+        ? await db.get(
+          `SELECT COUNT(*) AS cnt FROM strategies s
+           JOIN api_keys ak ON ak.id = s.api_key_id
+           WHERE ak.name = ?
+             AND s.id <> ?
+             AND s.is_active = 1
+             AND IFNULL(s.is_archived, 0) = 0
+             AND s.state IN ('long','short')
+             AND (
+               UPPER(s.base_symbol) IN (${placeholders})
+               OR UPPER(IFNULL(s.quote_symbol, '')) IN (${placeholders})
+             )`,
+          [apiKeyName, strategyId, ...legSymbols, ...legSymbols],
+        )
+        : { cnt: 0 };
       siblingActiveCount = Number(sibRow?.cnt || 0);
     } catch (sibErr) {
       logger.warn(`Sibling-check query failed for resync guard (strategy ${strategyId}): ${(sibErr as Error)?.message || sibErr}`);
@@ -857,7 +911,8 @@ export const executeStrategy = async (
       // pre-aggregation race; skip and clear any pending confirmation.
       resyncPendingFlatByStrategy.delete(strategyId);
       logger.warn(
-        `Skipping state_resynced_flat for strategy ${strategyId} (${apiKeyName}/${mergedStrategy.base_symbol}): ` +
+        `Skipping state_resynced_flat for strategy ${strategyId} (${apiKeyName}/${mergedStrategy.base_symbol}`
+        + `${mergedStrategy.quote_symbol ? '/' + mergedStrategy.quote_symbol : ''}): ` +
         `${siblingActiveCount} sibling(s) still in non-flat state — visible 'flat' may be stale snapshot`
       );
     } else {
@@ -1093,13 +1148,16 @@ export const executeStrategy = async (
   if (!isStatArb && !isMomentumScalp && !isMrs2) {
     const evalBar = candleContext.candlesForSignal[candleContext.candlesForSignal.length - 1];
 
-    if (!closedAction && isZzPivot && state === 'long' && evalBar && evalBar.low <= donchianLow) {
+    const zzBreakMode = resolveZzBreakMode(mergedStrategy.detection_source);
+    if (!closedAction && isZzPivot && state === 'long' && evalBar
+      && computeZzPivotSarHit(evalBar, 'long', donchianHigh, donchianLow, zzBreakMode)) {
       await closeAndRecordExit('stop_loss_long', 'long');
       closedAction = 'stop_loss_long';
       closedResult = `ZZ SAR long exit at level ${donchianLow.toFixed(6)}`;
     }
 
-    if (!closedAction && isZzPivot && state === 'short' && evalBar && evalBar.high >= donchianHigh) {
+    if (!closedAction && isZzPivot && state === 'short' && evalBar
+      && computeZzPivotSarHit(evalBar, 'short', donchianHigh, donchianLow, zzBreakMode)) {
       await closeAndRecordExit('stop_loss_short', 'short');
       closedAction = 'stop_loss_short';
       closedResult = `ZZ SAR short exit at level ${donchianHigh.toFixed(6)}`;
@@ -2216,10 +2274,14 @@ export const executeStrategy = async (
       throw error;
     }
 
-    const livePairAfterOpen = await loadPairPositionsForValidation(
+    // WEEX/BingX often lag position books after market open — poll longer before
+    // killing a just-opened pair (root cause of desync flats, not a signal cooldown).
+    let livePairAfterOpen = await loadPairPositionsForValidation(
       apiKeyName,
       mergedStrategy.base_symbol,
-      mergedStrategy.quote_symbol,
+      mergedStrategy.quote_symbol!,
+      10,
+      800,
     );
 
     if (!livePairAfterOpen.basePosition || !livePairAfterOpen.quotePosition || !qtyPlan) {
@@ -2251,13 +2313,33 @@ export const executeStrategy = async (
       });
     }
 
-    const liveBalanceCheck = validateLiveLegBalance(
+    let liveBalanceCheck = validateLiveLegBalance(
       livePairAfterOpen.basePosition,
       livePairAfterOpen.quotePosition,
       Math.abs(mergedStrategy.base_coef),
       Math.abs(mergedStrategy.quote_coef),
       MAX_POST_OPEN_SHARE_ERROR
     );
+
+    // Partial fills can look like weight desync for a few seconds — re-poll before kill.
+    for (let weightRetry = 0; weightRetry < 3 && !liveBalanceCheck.ok; weightRetry += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+      livePairAfterOpen = await loadPairPositionsForValidation(
+        apiKeyName,
+        mergedStrategy.base_symbol,
+        mergedStrategy.quote_symbol!,
+        3,
+        600,
+      );
+      if (!livePairAfterOpen.basePosition || !livePairAfterOpen.quotePosition) break;
+      liveBalanceCheck = validateLiveLegBalance(
+        livePairAfterOpen.basePosition,
+        livePairAfterOpen.quotePosition,
+        Math.abs(mergedStrategy.base_coef),
+        Math.abs(mergedStrategy.quote_coef),
+        MAX_POST_OPEN_SHARE_ERROR
+      );
+    }
 
     if (!liveBalanceCheck.ok) {
       await closeStrategyExposure(apiKeyName, mergedStrategy);
@@ -2298,6 +2380,8 @@ export const executeStrategy = async (
     const livePositionAfterOpen = await loadSinglePositionForValidation(
       apiKeyName,
       mergedStrategy.base_symbol,
+      10,
+      800,
     );
 
     if (!livePositionAfterOpen) {

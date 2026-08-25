@@ -31,8 +31,10 @@ import {
 import {
   buildZzPivotLevelSeries,
   computeZzPivotEntrySignal,
+  computeZzPivotSarHit,
   isZzPivotStrategyType,
   normalizeZzPivotStrategyType,
+  resolveZzBreakMode,
   zzPivotVariantFromType,
   type ZzPivotLevels,
 } from '../bot/zzPivotLevels';
@@ -859,13 +861,14 @@ const computeZzPivotSignalAtIndex = (
   zzPivotLevelSeries: ZzPivotLevels[] | undefined,
   longEnabled: boolean,
   shortEnabled: boolean,
+  breakMode: 'wick' | 'close' = 'wick',
 ): BacktestSignalPayload => {
   const levels = zzPivotLevelSeries?.[index];
   const current = candles[index];
   if (!levels || !current) {
     return { signal: 'none', current: current?.close ?? 0, donchianCenter: 0, zScore: null };
   }
-  const entry = computeZzPivotEntrySignal(current, levels, longEnabled, shortEnabled);
+  const entry = computeZzPivotEntrySignal(current, levels, longEnabled, shortEnabled, breakMode);
   const center = (levels.levelLong + levels.levelShort) / 2;
   return {
     signal: entry,
@@ -912,6 +915,7 @@ const computeSignalAtIndex = (
       zzPivotLevelSeries,
       longEnabled,
       shortEnabled,
+      resolveZzBreakMode(source),
     );
   }
 
@@ -3273,15 +3277,17 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         closedOnCurrentBar = true;
       }
     } else if (!isClassicDca && !isMomentumScalp) {
-      // ZZ pivot SAR exit (opposite level)
+      // ZZ pivot SAR exit (opposite level) — wick (default) or close via detection_source / BT_ZZ_BREAK_MODE
       if (!closedOnCurrentBar && isZzPivot) {
         const levels = runtime.zzPivotLevelSeries?.[event.candleIndex];
+        const zzBreak = resolveZzBreakMode(strategy.detection_source);
         if (levels) {
-          if (state === 'long' && candle.low <= levels.levelShort) {
+          if (state === 'long' && computeZzPivotSarHit(candle, 'long', levels.levelLong, levels.levelShort, zzBreak)) {
             closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'zz_sar_long');
             closedOnCurrentBar = true;
           }
-          if (!closedOnCurrentBar && state === 'short' && candle.high >= levels.levelLong) {
+          if (!closedOnCurrentBar && state === 'short'
+            && computeZzPivotSarHit(candle, 'short', levels.levelLong, levels.levelShort, zzBreak)) {
             closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'zz_sar_short');
             closedOnCurrentBar = true;
           }

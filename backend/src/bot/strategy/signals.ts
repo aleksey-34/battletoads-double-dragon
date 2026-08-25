@@ -6,6 +6,7 @@ import {
   buildZzPivotLevelSeries,
   computeZzPivotEntrySignal,
   isZzPivotStrategyType,
+  resolveZzBreakMode,
   zzPivotVariantFromType,
 } from '../zzPivotLevels';
 import { computeCtFractalSignalAtIndex, isCtFractalStrategyType } from '../ctFractalSignal';
@@ -176,6 +177,7 @@ export const computeZzPivotSignal = (
   strategyType: StrategyType,
   longEnabled: boolean,
   shortEnabled: boolean,
+  breakMode: 'wick' | 'close' = 'wick',
 ): ComputedSignal => {
   const fastLen = Math.max(2, Math.floor(length));
   const variant = zzPivotVariantFromType(strategyType);
@@ -183,7 +185,7 @@ export const computeZzPivotSignal = (
   const index = candles.length - 1;
   const current = candles[index];
   const levels = levelsSeries[index];
-  const entry = computeZzPivotEntrySignal(current, levels, longEnabled, shortEnabled);
+  const entry = computeZzPivotEntrySignal(current, levels, longEnabled, shortEnabled, breakMode);
   const center = (levels.levelLong + levels.levelShort) / 2;
   return {
     signal: entry,
@@ -286,7 +288,14 @@ export const computeSignal = (
   }
 
   if (isZzPivotStrategyType(strategyType)) {
-    return computeZzPivotSignal(candles, length, strategyType, longEnabled, shortEnabled);
+    return computeZzPivotSignal(
+      candles,
+      length,
+      strategyType,
+      longEnabled,
+      shortEnabled,
+      resolveZzBreakMode(detectionSource),
+    );
   }
 
   return computeDonchianSignal(

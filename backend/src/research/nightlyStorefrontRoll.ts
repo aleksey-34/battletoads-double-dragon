@@ -785,38 +785,47 @@ const stampPortfolios = async (opts: {
           return packFailedFair(fromDate, opts.dateTo, `no live book IDs for ${copyKey}`);
         }
         try {
-          const result = await runBacktest({
-            apiKeyName: copyKey,
-            // Copy keys are WEEX; hybrid candles + Bybit history live on BTDD_D1.
-            dataApiKeyName: opts.apiKeyName,
-            mode: 'portfolio',
-            strategyIds: fairIds,
-            dateFrom: fromDate,
-            dateTo: opts.dateTo,
-            bars: 4000,
-            warmupBars: 120,
-            // Skip legs with short history instead of failing whole fair run (freqX).
-            skipMissingSymbols: true,
-            initialBalance: FAIR_COPY_CAPITAL,
-            commissionPercent: 0.1,
-            slippagePercent: 0.05,
-            maxOpenPositions: 0,
-            maxOpenPositionsByBook: fairMaxOpenByBook,
-            bookKeyByStrategyId: fairBookKeyByStrategyId,
-            lotPercentOverride: 1,
-            lotPercentMultiplierByStrategyId: fairLotMultByStrategyId,
-            enablePairLock: true,
-            maxDepositOverride: fairAnyReinvest ? FAIR_COPY_CAPITAL * 50 : 0,
-            reinvestPercentByStrategyId: fairRiByStrategyId,
-            portfolioCircuitBreaker: tierCb as any,
-            researchLotSchedule: fearBoost as any,
-          } as any);
+          // Fair copy-compare must use the same exchange OHLC as live (WEEX etc.),
+          // not hybrid/Bybit history on BTDD_D1 — otherwise ZZ wick breaks diverge.
+          const prevHybridDir = process.env.HYBRID_CANDLE_DIR;
+          delete process.env.HYBRID_CANDLE_DIR;
+          let result: Awaited<ReturnType<typeof runBacktest>>;
+          try {
+            result = await runBacktest({
+              apiKeyName: copyKey,
+              dataApiKeyName: copyKey,
+              mode: 'portfolio',
+              strategyIds: fairIds,
+              dateFrom: fromDate,
+              dateTo: opts.dateTo,
+              bars: 4000,
+              warmupBars: 120,
+              // Skip legs with short history instead of failing whole fair run (freqX).
+              skipMissingSymbols: true,
+              initialBalance: FAIR_COPY_CAPITAL,
+              commissionPercent: 0.1,
+              slippagePercent: 0.05,
+              maxOpenPositions: 0,
+              maxOpenPositionsByBook: fairMaxOpenByBook,
+              bookKeyByStrategyId: fairBookKeyByStrategyId,
+              lotPercentOverride: 1,
+              lotPercentMultiplierByStrategyId: fairLotMultByStrategyId,
+              enablePairLock: true,
+              maxDepositOverride: fairAnyReinvest ? FAIR_COPY_CAPITAL * 50 : 0,
+              reinvestPercentByStrategyId: fairRiByStrategyId,
+              portfolioCircuitBreaker: tierCb as any,
+              researchLotSchedule: fearBoost as any,
+            } as any);
+          } finally {
+            if (prevHybridDir !== undefined) process.env.HYBRID_CANDLE_DIR = prevHybridDir;
+            else delete process.env.HYBRID_CANDLE_DIR;
+          }
           const packed = packFairRun(result, fromDate, opts.dateTo, FAIR_COPY_CAPITAL, idToPair);
           if (packed.trades === 0) {
             logger.warn(
               `[nightlyStorefrontRoll] fair ${pf.id} ${fromDate}..${opts.dateTo} produced 0 trades `
-              + `on ${fairIds.length} live IDs (copy=${copyKey}). Check skip/ID mapping, not hybrid files `
-              + `if BCHUSDT/APEUSDT 4h exist. missingCandles=${missingCandles.length}`,
+              + `on ${fairIds.length} live IDs (copy=${copyKey}, candles=exchange). `
+              + `Check skip/ID mapping. missingCandles(hybridWarn)=${missingCandles.length}`,
             );
           }
           return packed;

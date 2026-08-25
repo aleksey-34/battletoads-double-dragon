@@ -60,9 +60,11 @@ export const loadPairPositionsForValidation = async (
 ): Promise<{ basePosition: any | null; quotePosition: any | null }> => {
   const safeAttempts = Math.max(1, Math.floor(attempts));
   invalidatePositionCache(apiKeyName);
+  let lastBase: any | null = null;
+  let lastQuote: any | null = null;
 
   for (let attempt = 0; attempt < safeAttempts; attempt += 1) {
-    const positions = await getPositions(apiKeyName, undefined, { forceRefresh: attempt === 0 });
+    const positions = await getPositions(apiKeyName, undefined, { forceRefresh: true });
 
     const basePosition = positions.find((position: any) => {
       return (
@@ -78,8 +80,11 @@ export const loadPairPositionsForValidation = async (
       );
     }) || null;
 
-    if (basePosition && quotePosition) {
-      return { basePosition, quotePosition };
+    if (basePosition) lastBase = basePosition;
+    if (quotePosition) lastQuote = quotePosition;
+
+    if (lastBase && lastQuote) {
+      return { basePosition: lastBase, quotePosition: lastQuote };
     }
 
     if (attempt < safeAttempts - 1) {
@@ -89,8 +94,8 @@ export const loadPairPositionsForValidation = async (
   }
 
   return {
-    basePosition: null,
-    quotePosition: null,
+    basePosition: lastBase,
+    quotePosition: lastQuote,
   };
 };
 
