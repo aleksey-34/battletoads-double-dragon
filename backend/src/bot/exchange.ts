@@ -564,6 +564,11 @@ export const ensureExchangeClientInitialized = async (apiKeyName: string): Promi
   if (!row) {
     return;
   }
+  // Soft-disabled keys (keys_invalid demat leftovers) — never init / poll exchange.
+  if (row.is_enabled !== undefined && row.is_enabled !== null && Number(row.is_enabled) === 0) {
+    logger.debug(`Skip exchange init for disabled api key: ${name}`);
+    return;
+  }
 
   initExchangeClient(row as ApiKey);
   logger.info(`Lazy-initialized exchange client for key: ${name}`);

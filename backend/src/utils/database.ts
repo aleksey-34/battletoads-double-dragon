@@ -795,6 +795,8 @@ export const initDB = async () => {
   await ensureColumn('api_keys', "passphrase TEXT DEFAULT ''");
   await ensureColumn('api_keys', "created_at TEXT DEFAULT ''");
   await ensureColumn('api_keys', "updated_at TEXT DEFAULT ''");
+  // Soft-disable dead / keys_invalid leftovers so monitoring & watchdogs skip them.
+  await ensureColumn('api_keys', 'is_enabled INTEGER DEFAULT 1');
   await ensureColumn('strategies', "strategy_type TEXT DEFAULT 'DD_BattleToads'");
   await ensureColumn('strategies', "market_mode TEXT DEFAULT 'synthetic'");
   await ensureColumn('strategies', 'show_settings BOOLEAN DEFAULT 1');

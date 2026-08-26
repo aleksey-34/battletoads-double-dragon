@@ -19,6 +19,7 @@ import {
   WEEX_COPY_STOCK_SYMBOL,
   WEEX_STOCK_SYMBOLS,
 } from './weexKeyUtils';
+import { filterPollableApiKeyNames, loadPollableApiKeyNames } from './apiKeyPollGate';
 import {
   loadWeexDelistState,
   saveWeexDelistState,
@@ -76,15 +77,9 @@ const loadWatchedSymbols = async (): Promise<Set<string>> => {
     if (sym) out.add(sym);
   }
 
-  // api_keys has no `enabled` column — any weex key is a candidate.
-  const keys = await db.all(`
-    SELECT DISTINCT a.name AS name
-    FROM api_keys a
-    WHERE a.exchange = 'weex'
-  `) || [];
-  for (const row of keys) {
-    const name = String(row?.name || '').trim();
-    if (!name) continue;
+  // Only poll live WEEX keys (skip is_enabled=0 and keys_invalid cabinets).
+  const keyNames = await loadPollableApiKeyNames({ exchange: 'weex' });
+  for (const name of keyNames) {
     try {
       await ensureExchangeClientInitialized(name);
       const positions = await getPositions(name).catch(() => []);
@@ -151,15 +146,9 @@ const attemptEmergencyClose = async (symbol: string): Promise<{ openKeys: string
   const sym = normalizeWeexSymbolKey(symbol);
   const openKeys: string[] = [];
   const stuckKeys: string[] = [];
-  const keys = await db.all(`
-    SELECT DISTINCT a.name AS name
-    FROM api_keys a
-    WHERE a.exchange = 'weex'
-  `) || [];
+  const keyNames = await loadPollableApiKeyNames({ exchange: 'weex' });
 
-  for (const row of keys) {
-    const apiKeyName = String(row?.name || '').trim();
-    if (!apiKeyName) continue;
+  for (const apiKeyName of keyNames) {
     try {
       await ensureExchangeClientInitialized(apiKeyName);
       const positions = await getPositions(apiKeyName).catch(() => []);
@@ -240,19 +229,21 @@ const runCopyStockHealthProbe = async (): Promise<void> => {
   if (now - lastCopyStockHealthAt < COPY_STOCK_HEALTH_MS) return;
   lastCopyStockHealthAt = now;
 
-  // api_keys has no `enabled` column — filter by name only (same as loadWatchedSymbols).
-  const copyKeys = await db.all(`
+  // Copy-like WEEX keys only — skip disabled / keys_invalid.
+  const rawCopyKeys = await db.all(`
     SELECT name FROM api_keys
     WHERE exchange = 'weex'
+      AND COALESCE(is_enabled, 1) = 1
       AND (LOWER(name) LIKE 'copy_%' OR LOWER(name) LIKE 'arcopy%' OR LOWER(name) LIKE 'icopy%')
   `) || [];
-  if (!copyKeys.length) return;
+  const copyKeyNames = await filterPollableApiKeyNames(
+    rawCopyKeys.map((row: any) => String(row?.name || '').trim()).filter(Boolean),
+  );
+  if (!copyKeyNames.length) return;
 
   const summary: Record<string, string> = {};
   const deadSyms: string[] = [];
-  for (const row of copyKeys) {
-    const apiKeyName = String(row?.name || '').trim();
-    if (!apiKeyName) continue;
+  for (const apiKeyName of copyKeyNames) {
     try {
       await ensureExchangeClientInitialized(apiKeyName);
       const keyRow = await db.get('SELECT * FROM api_keys WHERE name = ?', [apiKeyName]);

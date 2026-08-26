@@ -10,6 +10,8 @@ export interface ApiKey {
   speed_limit: number;
   testnet?: boolean;
   demo?: boolean;
+  /** Soft-disable: 0 = never poll/init exchange (keys_invalid leftovers). */
+  is_enabled?: number | boolean;
 }
 
 export interface RiskSettings {

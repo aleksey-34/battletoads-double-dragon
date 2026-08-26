@@ -1,6 +1,7 @@
 import logger from '../utils/logger';
 import { db } from '../utils/database';
 import { ensureExchangeClientInitialized, hasExchangeClient } from '../bot/exchange';
+import { filterPollableApiKeyNames } from '../bot/apiKeyPollGate';
 import { recordMonitoringSnapshot } from '../bot/monitoring';
 import { runReconciliationForApiKey, syncExchangeFillsForApiKey } from './reconciliationEngine';
 import { runLiquidityScanForApiKey } from './liquidityScanner';
@@ -14,12 +15,14 @@ const loadApiKeysWithActiveStrategies = async (): Promise<string[]> => {
     `SELECT DISTINCT a.name
      FROM api_keys a
      JOIN strategies s ON s.api_key_id = a.id
-     WHERE s.is_active = 1`
+     WHERE s.is_active = 1
+       AND COALESCE(a.is_enabled, 1) = 1`
   );
 
-  return (Array.isArray(rows) ? rows : [])
+  const names = (Array.isArray(rows) ? rows : [])
     .map((row) => String(row?.name || '').trim())
     .filter((name) => name.length > 0);
+  return filterPollableApiKeyNames(names);
 };
 
 /** Keys assigned to client cabinets (even with no active strategies yet). */
@@ -58,7 +61,8 @@ const loadMonitoringApiKeys = async (): Promise<string[]> => {
     loadApiKeysWithActiveStrategies(),
     loadApiKeysAssignedToTenants(),
   ]);
-  return Array.from(new Set([...active, ...assigned]));
+  // Defense in depth: drop disabled + keys_invalid leftovers even if a path leaked them.
+  return filterPollableApiKeyNames(Array.from(new Set([...active, ...assigned])));
 };
 
 const loadAllApiKeys = async (): Promise<string[]> => {
