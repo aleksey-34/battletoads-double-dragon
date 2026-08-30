@@ -11,7 +11,7 @@
 
 import { db } from '../utils/database';
 
-export type LiveTradeEventOrigin = 'strategy_signal' | 'exchange_fill' | 'external';
+export type LiveTradeEventOrigin = 'strategy_signal' | 'exchange_fill' | 'external' | 'state_resync';
 
 export type LiveTradeEvent = {
   id: number;
@@ -42,7 +42,7 @@ export type LiveTradeEvent = {
 
 const normalizeEventOrigin = (value: unknown): LiveTradeEventOrigin | null => {
   const raw = String(value || '').trim().toLowerCase();
-  if (raw === 'strategy_signal' || raw === 'exchange_fill' || raw === 'external') {
+  if (raw === 'strategy_signal' || raw === 'exchange_fill' || raw === 'external' || raw === 'state_resync') {
     return raw as LiveTradeEventOrigin;
   }
   return null;

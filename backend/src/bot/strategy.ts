@@ -423,7 +423,8 @@ export const executeStrategy = async (
     sourceOrderId?: string,
     sourceSymbol?: string,
     entryPriceOverride?: number,
-    actualFillPrice?: number
+    actualFillPrice?: number,
+    eventOrigin: 'strategy_signal' | 'state_resync' = 'strategy_signal',
   ): Promise<void> => {
     const normalizedPrice = Number.isFinite(price) && price > 0 ? price : currentRatio;
     const normalizedSize = Number.isFinite(positionSize) ? Math.max(0, Number(positionSize)) : 0;
@@ -452,7 +453,7 @@ export const executeStrategy = async (
       await recordLiveTradeEvent(strategyId, {
         trade_type: tradeType,
         side,
-        event_origin: 'strategy_signal',
+        event_origin: eventOrigin,
         entry_time: evaluatedBarTimeMs,
         entry_price: resolvedEntryPrice,
         position_size: normalizedSize,
@@ -475,6 +476,14 @@ export const executeStrategy = async (
     return signalSide === 'long' ? 'short' : 'long';
   };
 
+  const readLegQty = (position: any | null): number => {
+    if (!position) {
+      return 0;
+    }
+    const size = Number.parseFloat(String(position?.size ?? position?.contracts ?? '0'));
+    return Number.isFinite(size) ? Math.abs(size) : 0;
+  };
+
   const orderFillPrice = (order: unknown): number | undefined => {
     const raw = (order as any)?.average
       ?? (order as any)?.avgPrice
@@ -493,6 +502,7 @@ export const executeStrategy = async (
     baseOrder?: unknown,
     quoteOrder?: unknown,
     entryRatioOverride?: number,
+    eventOrigin: 'strategy_signal' | 'state_resync' = 'strategy_signal',
   ): Promise<void> => {
     const baseOrderId = String((baseOrder as any)?.orderId || (baseOrder as any)?.order_id || '').trim() || undefined;
     const quoteOrderId = String((quoteOrder as any)?.orderId || (quoteOrder as any)?.order_id || '').trim() || undefined;
@@ -505,8 +515,12 @@ export const executeStrategy = async (
       mergedStrategy.base_symbol,
       entryRatioOverride,
       orderFillPrice(baseOrder),
+      eventOrigin,
     );
-    if (!isMono && mergedStrategy.quote_symbol && quoteQty > 0) {
+    // Synth exit must always record both legs; entry skips quote when quoteQty=0.
+    const recordQuoteLeg = !isMono && mergedStrategy.quote_symbol
+      && (tradeType === 'exit' || quoteQty > 0);
+    if (recordQuoteLeg) {
       const quoteLegPrice = Number.isFinite(Number(quotePrice)) && Number(quotePrice) > 0
         ? Number(quotePrice)
         : ratioPrice;
@@ -519,6 +533,7 @@ export const executeStrategy = async (
         mergedStrategy.quote_symbol,
         entryRatioOverride,
         orderFillPrice(quoteOrder),
+        eventOrigin,
       );
     }
   };
@@ -606,8 +621,9 @@ export const executeStrategy = async (
     action: StrategyCloseAction,
     signalSnapshot: StrategySignal
   ): Promise<void> => {
-    let exitBaseQty = 0;
-    let exitQuoteQty = 0;
+    // Seed from cycle-start snapshot; re-fetch may return 0 after fills land mid-cycle.
+    let exitBaseQty = readLegQty(liveBase);
+    let exitQuoteQty = readLegQty(liveQuote);
     try {
       const positions = await getPositions(apiKeyName);
       const list = Array.isArray(positions) ? positions : [];
@@ -621,8 +637,14 @@ export const executeStrategy = async (
           && Number.parseFloat(String(position?.size || '0')) > 0
         ))
         : null;
-      exitBaseQty = Math.abs(Number.parseFloat(String(basePos?.size || '0')));
-      exitQuoteQty = Math.abs(Number.parseFloat(String(quotePos?.size || '0')));
+      const fetchedBaseQty = readLegQty(basePos);
+      const fetchedQuoteQty = readLegQty(quotePos);
+      if (fetchedBaseQty > 0) {
+        exitBaseQty = fetchedBaseQty;
+      }
+      if (fetchedQuoteQty > 0) {
+        exitQuoteQty = fetchedQuoteQty;
+      }
     } catch (positionError) {
       logger.debug(`Could not read exit position sizes for strategy ${strategyId}: ${formatActionError(positionError)}`);
     }
@@ -782,7 +804,16 @@ export const executeStrategy = async (
     });
 
     if (previousState === 'long' || previousState === 'short') {
-      await recordRuntimeTradeEvent('exit', previousState, currentRatio, 0, undefined, mergedStrategy.base_symbol, previousEntryRatio ?? undefined);
+      await recordSynthRuntimeEvents(
+        'exit',
+        previousState,
+        currentRatio,
+        readLegQty(liveBase),
+        readLegQty(liveQuote),
+        undefined,
+        undefined,
+        previousEntryRatio ?? undefined,
+      );
     }
 
     logger.warn(`Detected mixed pair state for strategy ${strategyId}; positions were closed (was ${previousState})`);
@@ -827,7 +858,16 @@ export const executeStrategy = async (
     });
 
     if (previousState === 'long' || previousState === 'short') {
-      await recordRuntimeTradeEvent('exit', previousState, currentRatio, 0, undefined, mergedStrategy.base_symbol, previousEntryRatio ?? undefined);
+      await recordSynthRuntimeEvents(
+        'exit',
+        previousState,
+        currentRatio,
+        readLegQty(liveBase),
+        readLegQty(liveQuote),
+        undefined,
+        undefined,
+        previousEntryRatio ?? undefined,
+      );
     }
 
     logger.warn(`Detected wrong-side live state for strategy ${strategyId}; was ${previousState}, live=${livePairState}; positions were closed`);
@@ -959,7 +999,17 @@ export const executeStrategy = async (
 
         if (previousState === 'long' || previousState === 'short') {
           logger.warn(`State resynced to flat for strategy ${strategyId} (${apiKeyName}): was ${previousState}, entry_ratio=${previousEntryRatio}, current_ratio=${currentRatio} (CONFIRMED after ${RESYNC_CONFIRM_MS / 1000}s)`);
-          await recordRuntimeTradeEvent('exit', previousState, currentRatio, 0, undefined, mergedStrategy.base_symbol, previousEntryRatio ?? undefined);
+          await recordSynthRuntimeEvents(
+            'exit',
+            previousState,
+            currentRatio,
+            readLegQty(liveBase),
+            readLegQty(liveQuote),
+            undefined,
+            undefined,
+            previousEntryRatio ?? undefined,
+            'state_resync',
+          );
         }
 
         // Do not fall through into entry on the same closed bar — that recreated
