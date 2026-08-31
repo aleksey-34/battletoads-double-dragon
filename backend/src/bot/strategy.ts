@@ -189,6 +189,7 @@ export const executeStrategy = async (
   const marketMode = normalizeMarketMode(mergedStrategy.market_mode);
   const isMono = marketMode === 'mono';
   const positionLabel = isMono ? 'position' : 'synthetic position';
+  let quotePrice: number | null = null;
 
   // Execution must follow persisted strategy settings only.
   // This prevents stale UI/chart payloads from silently mutating strategy pairs.
@@ -2025,7 +2026,6 @@ export const executeStrategy = async (
   }
 
   const basePrice = await getLatestMarketClose(apiKeyName, mergedStrategy.base_symbol);
-  let quotePrice: number | null = null;
   let qtyPlan: BalancedQtyPlan | null = null;
   let singleQtyPlan: SingleQtyPlan | null = null;
   let baseQty = '';
