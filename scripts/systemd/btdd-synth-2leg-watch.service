@@ -1,0 +1,19 @@
+[Unit]
+Description=BTDD synth 2-leg exit watcher (one Telegram result)
+After=network-online.target btdd-runtime.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/opt/battletoads-double-dragon/.env
+Environment=BTDD_REPO=/opt/battletoads-double-dragon
+Environment=BTDD_DB_PATH=/opt/battletoads-double-dragon/backend/database.db
+Environment=BTDD_WATCH_STATE=/opt/battletoads-double-dragon/results/synth_2leg_watch_state.json
+Environment=BTDD_EXIT_FIX_DEPLOY=2026-08-31T16:38:54+00:00
+WorkingDirectory=/opt/battletoads-double-dragon
+ExecStart=/usr/bin/python3 /opt/battletoads-double-dragon/scripts/admin_tools/watch_synth_2leg_exit_telegram.py
+User=ubuntu
+Group=ubuntu
+
+[Install]
+WantedBy=multi-user.target
