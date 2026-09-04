@@ -9,6 +9,36 @@ export const RESYNC_CONFIRM_MS = 90_000;
 export interface PendingFlatEntry { firstDetectedMs: number; lastRatio: number; }
 export const resyncPendingFlatByStrategy = new Map<number, PendingFlatEntry>();
 
+/** While (and shortly after) a synth close runs, skip mixed-guard kill on this strategy.
+ * Prevents a parallel cycle from seeing one leg already flat and forcing desync_closed_mixed
+ * while the other leg is still being closed — that widens one-legged arb risk.
+ */
+export const CLOSE_IN_FLIGHT_TTL_MS = 60_000;
+export const closingInFlightByStrategy = new Map<number, number>();
+
+export const markStrategyCloseInFlight = (strategyId: number): void => {
+  const id = Number(strategyId);
+  if (Number.isFinite(id) && id > 0) {
+    closingInFlightByStrategy.set(id, Date.now());
+  }
+};
+
+export const isStrategyCloseInFlight = (strategyId: number): boolean => {
+  const id = Number(strategyId);
+  if (!Number.isFinite(id) || id <= 0) {
+    return false;
+  }
+  const startedAt = closingInFlightByStrategy.get(id);
+  if (!startedAt) {
+    return false;
+  }
+  if (Date.now() - startedAt > CLOSE_IN_FLIGHT_TTL_MS) {
+    closingInFlightByStrategy.delete(id);
+    return false;
+  }
+  return true;
+};
+
 export const BAR_CLOSE_FRESHNESS_MS = 1500;
 export const TRAILING_RATIO_EPSILON = 1e-12;
 
@@ -206,21 +236,50 @@ export const closeStrategyExposure = async (
   apiKeyName: string,
   strategy: Pick<Strategy, 'id' | 'market_mode' | 'base_symbol' | 'quote_symbol' | 'market_type'>
 ): Promise<void> => {
+  const strategyId = Number((strategy as { id?: number }).id);
+  const trackId = Number.isFinite(strategyId) && strategyId > 0 ? strategyId : 0;
+  if (trackId) {
+    markStrategyCloseInFlight(trackId);
+  }
+
   const symbols = getStrategySymbols(strategy);
   const exchangeMarketType: 'spot' | 'swap' | undefined = strategy.market_type === 'spot' ? 'spot' : undefined;
+  const closeOpts = exchangeMarketType ? { marketType: exchangeMarketType } : undefined;
+
+  const toClose: string[] = [];
   for (const symbol of symbols) {
-    const strategyId = Number((strategy as { id?: number }).id);
-    if (Number.isFinite(strategyId) && strategyId > 0) {
-      const siblings = await hasOpenSiblingsForSymbol(apiKeyName, symbol, strategyId);
+    if (trackId) {
+      const siblings = await hasOpenSiblingsForSymbol(apiKeyName, symbol, trackId);
       if (siblings) {
         logger.info(
           `closeStrategyExposure: skipping exchange close for ${apiKeyName}/${symbol} — `
-          + `sibling strategies still hold the shared position (strategy=${strategyId})`
+          + `sibling strategies still hold the shared position (strategy=${trackId})`
         );
         continue;
       }
     }
-    await closeAllForSymbol(apiKeyName, symbol, exchangeMarketType ? { marketType: exchangeMarketType } : undefined);
+    toClose.push(symbol);
+  }
+
+  // Parallel leg close — shrink one-legged arb window from sequential awaits to ~max(leg).
+  if (toClose.length <= 1) {
+    for (const symbol of toClose) {
+      await closeAllForSymbol(apiKeyName, symbol, closeOpts);
+    }
+    return;
+  }
+
+  logger.info(
+    `closeStrategyExposure: parallel close ${toClose.join('+')} for ${apiKeyName}`
+    + (trackId ? ` strategy=${trackId}` : '')
+  );
+  const results = await Promise.allSettled(
+    toClose.map((symbol) => closeAllForSymbol(apiKeyName, symbol, closeOpts)),
+  );
+  const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+  if (failures.length > 0) {
+    const messages = failures.map((f) => String((f.reason as Error)?.message || f.reason)).join('; ');
+    throw new Error(`Parallel close failed for ${toClose.join('+')}: ${messages}`);
   }
 };
 

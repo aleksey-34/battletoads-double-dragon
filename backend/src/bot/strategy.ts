@@ -117,6 +117,7 @@ import {
   rememberProcessedClosedBar,
   closedBarDedupeKey,
   resyncPendingFlatByStrategy,
+  isStrategyCloseInFlight,
   resolveExecutionCandleContext,
 } from './strategy/execution';
 import {
@@ -698,6 +699,20 @@ export const executeStrategy = async (
     // NEW: if this strategy is flat, the visible leg almost certainly belongs to another
     // strategy — skip entirely. If in-position, use a long grace period (5 min) to
     // avoid race conditions from propagation delay or rate-limit glitches.
+    if (isStrategyCloseInFlight(strategyId)) {
+      logger.info(
+        `Mixed pair state for strategy ${strategyId} — skipping; close already in-flight`
+      );
+      return returnWithProcessedBar({
+        result: 'Mixed pair state skipped — strategy close already in-flight',
+        action: 'mixed_skip_close_inflight',
+        strategy: mergedStrategy,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
     if (state === 'flat') {
       logger.info(
         `Mixed pair state for strategy ${strategyId} (state=flat) — skipping; visible leg likely belongs to another strategy`
